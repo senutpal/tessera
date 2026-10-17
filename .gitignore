@@ -31,7 +31,5 @@ Thumbs.db
 *.tmp
 *.temp
 AGENTS.md
-
-# Local agent workflow artifacts
 pr_materials.md
 *.plan.md
