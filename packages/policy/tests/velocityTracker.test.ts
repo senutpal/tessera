@@ -192,21 +192,35 @@ describe("Spend Velocity Tracker", () => {
     expect(vAt60s.amount).toBe(1100); // 100 + 200 + 300 + 500
   });
 
-  it("bounds memory by evicting oldest idle ledger when maxAgents capacity is reached", () => {
-    const tracker = new VelocityTracker({ maxAgents: 3 });
+  it("bounds memory by evicting oldest expired ledger when maxAgents capacity is reached", () => {
+    const tracker = new VelocityTracker({ maxAgents: 3, maxRetentionMs: 2500 });
     const t0 = 1_700_000_000_000;
 
     tracker.recordSpend("agent-A", Money.fromCents(100, "USD"), t0);
     tracker.recordSpend("agent-B", Money.fromCents(200, "USD"), t0 + 1000);
     tracker.recordSpend("agent-C", Money.fromCents(300, "USD"), t0 + 2000);
 
-    // Adding 4th agent forces eviction of agent-A (oldest lastActive)
+    // Adding 4th agent at T+3000 evicts agent-A whose lastActive (T+0) is older than retentionCutoff (T+500)
     tracker.recordSpend("agent-D", Money.fromCents(400, "USD"), t0 + 3000);
 
     expect(tracker.getVelocity24h("agent-A", "USD", t0 + 4000).amount).toBe(0);
     expect(tracker.getVelocity24h("agent-B", "USD", t0 + 4000).amount).toBe(200);
     expect(tracker.getVelocity24h("agent-C", "USD", t0 + 4000).amount).toBe(300);
     expect(tracker.getVelocity24h("agent-D", "USD", t0 + 4000).amount).toBe(400);
+  });
+
+  it("fails closed throwing capacity error if all ledgers contain active in-window spend", () => {
+    const tracker = new VelocityTracker({ maxAgents: 3, maxRetentionMs: 60_000 });
+    const t0 = 1_700_000_000_000;
+
+    tracker.recordSpend("agent-A", Money.fromCents(100, "USD"), t0);
+    tracker.recordSpend("agent-B", Money.fromCents(200, "USD"), t0 + 1000);
+    tracker.recordSpend("agent-C", Money.fromCents(300, "USD"), t0 + 2000);
+
+    // At T+3000, all 3 agents have spend within 60s retention window -> refuses to evict
+    expect(() => tracker.recordSpend("agent-D", Money.fromCents(400, "USD"), t0 + 3000)).toThrow(
+      "VelocityTracker capacity reached",
+    );
   });
 
   it("prune() deletes dormant ledgers with no active entries past maxRetentionMs", () => {
