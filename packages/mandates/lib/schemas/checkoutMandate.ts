@@ -15,16 +15,18 @@ export function computeCheckoutHash(checkoutJwt: string): string {
   return createHash("sha256").update(checkoutJwt).digest("base64url");
 }
 
-const BaseCheckoutMandateSchema = z.object({
-  vct: z.literal("mandate.checkout.1", {
-    errorMap: () => ({ message: "vct claim must be 'mandate.checkout.1'" }),
-  }),
-  checkout_jwt: z.string().min(1, "checkout_jwt cannot be empty"),
-  checkout_hash: z.string().min(1, "checkout_hash cannot be empty"),
-  iat: z.number().int().positive("iat must be a positive Unix epoch timestamp").optional(),
-  exp: z.number().int().positive("exp must be a positive Unix epoch timestamp").optional(),
-  nonce: z.string().min(1, "nonce cannot be empty").optional(),
-});
+const BaseCheckoutMandateSchema = z
+  .object({
+    vct: z.literal("mandate.checkout.1", {
+      errorMap: () => ({ message: "vct claim must be 'mandate.checkout.1'" }),
+    }),
+    checkout_jwt: z.string().min(1, "checkout_jwt cannot be empty"),
+    checkout_hash: z.string().min(1, "checkout_hash cannot be empty"),
+    iat: z.number().int().positive("iat must be a positive Unix epoch timestamp").optional(),
+    exp: z.number().int().positive("exp must be a positive Unix epoch timestamp").optional(),
+    nonce: z.string().min(1, "nonce cannot be empty").optional(),
+  })
+  .passthrough();
 
 export type CheckoutMandate = z.infer<typeof BaseCheckoutMandateSchema>;
 

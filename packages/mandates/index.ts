@@ -3,6 +3,7 @@
 
 // Cryptographic primitives
 export {
+  computeCanonicalMandateHash,
   type Ed25519KeyPair,
   generateEd25519KeyPair,
   parsePrivateKey,
@@ -24,12 +25,14 @@ export {
   CheckoutMandateSchema,
   computeCheckoutHash,
 } from "./lib/schemas/checkoutMandate.js";
-// AP2 Payment Mandate schemas and types
+// AP2 Payment Mandate schemas, types, and Money converters
 export {
   type Amount,
   AmountSchema,
+  amountToMoney,
   type MerchantIdentifier,
   MerchantIdentifierSchema,
+  moneyToAmount,
   type PaymentInstrument,
   PaymentInstrumentSchema,
   type PaymentMandate,
@@ -37,10 +40,12 @@ export {
   type PispIdentifier,
   PispIdentifierSchema,
 } from "./lib/schemas/paymentMandate.js";
-// Anti-replay Nonce Store
+// Anti-replay Nonce Store (In-Memory and Redis)
 export {
   InMemoryNonceStore,
   type NonceStore,
+  type RedisClientLike,
+  RedisNonceStore,
 } from "./lib/store/nonceStore.js";
 // Verification pipeline
 export {

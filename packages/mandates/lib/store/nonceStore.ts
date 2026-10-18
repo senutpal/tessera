@@ -22,17 +22,18 @@ export class InMemoryNonceStore implements NonceStore {
    * Returns false if the nonce already exists and has not expired.
    */
   public consumeNonce(nonce: string, ttlSeconds: number): boolean {
+    if (typeof nonce !== "string" || nonce.trim().length === 0) {
+      throw new RangeError("Nonce must be a non-empty string");
+    }
+    if (typeof ttlSeconds !== "number" || ttlSeconds <= 0 || !Number.isFinite(ttlSeconds)) {
+      throw new RangeError("ttlSeconds must be a positive finite number");
+    }
+
     const now = Date.now();
     const existingExpiresAt = this.nonces.get(nonce);
 
     if (existingExpiresAt !== undefined && existingExpiresAt > now) {
       return false; // Replay detected
-    }
-
-    if (ttlSeconds <= 0) {
-      // Expired immediately; do not keep active
-      this.nonces.delete(nonce);
-      return true;
     }
 
     const expiresAt = now + ttlSeconds * 1000;
@@ -44,6 +45,9 @@ export class InMemoryNonceStore implements NonceStore {
    * Checks if the nonce is recorded and unexpired.
    */
   public hasNonce(nonce: string): boolean {
+    if (typeof nonce !== "string" || nonce.trim().length === 0) {
+      return false;
+    }
     const now = Date.now();
     const existingExpiresAt = this.nonces.get(nonce);
 
@@ -82,5 +86,53 @@ export class InMemoryNonceStore implements NonceStore {
    */
   public clear(): void {
     this.nonces.clear();
+  }
+}
+
+/**
+ * Compatible Redis client interface covering standard ioredis and node-redis methods.
+ */
+export interface RedisClientLike {
+  set(key: string, value: string, ...args: unknown[]): Promise<unknown>;
+  exists(key: string): Promise<number | boolean>;
+}
+
+/**
+ * Distributed Redis-backed NonceStore enforcing atomic SET NX EX replay protection.
+ */
+export class RedisNonceStore implements NonceStore {
+  constructor(
+    private readonly client: RedisClientLike,
+    private readonly keyPrefix = "tessera:nonce:",
+  ) {}
+
+  public async consumeNonce(nonce: string, ttlSeconds: number): Promise<boolean> {
+    if (typeof nonce !== "string" || nonce.trim().length === 0) {
+      throw new RangeError("Nonce must be a non-empty string");
+    }
+    if (typeof ttlSeconds !== "number" || ttlSeconds <= 0 || !Number.isFinite(ttlSeconds)) {
+      throw new RangeError("ttlSeconds must be a positive finite number");
+    }
+
+    const key = `${this.keyPrefix}${nonce}`;
+    const ttl = Math.ceil(ttlSeconds);
+
+    let result: unknown;
+    try {
+      result = await this.client.set(key, "1", "EX", ttl, "NX");
+    } catch {
+      result = await this.client.set(key, "1", { EX: ttl, NX: true });
+    }
+
+    return result === "OK" || result === true || result === 1;
+  }
+
+  public async hasNonce(nonce: string): Promise<boolean> {
+    if (typeof nonce !== "string" || nonce.trim().length === 0) {
+      return false;
+    }
+    const key = `${this.keyPrefix}${nonce}`;
+    const existsResult = await this.client.exists(key);
+    return existsResult === 1 || existsResult === true;
   }
 }

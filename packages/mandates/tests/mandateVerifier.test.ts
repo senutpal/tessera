@@ -1,5 +1,7 @@
+import { Money } from "@tessera/core";
 import { describe, expect, it } from "vitest";
 import {
+  amountToMoney,
   CheckoutMandateSchema,
   computeCheckoutHash,
   DuplicateMandateNonceError,
@@ -9,6 +11,8 @@ import {
   InvalidMandateSignatureError,
   MandateBindingMismatchError,
   MandateSchemaValidationError,
+  type MandateVerificationOptions,
+  moneyToAmount,
   PaymentMandateSchema,
   type SignedMandate,
   signMandate,
@@ -107,6 +111,17 @@ describe("AP2 Mandate Verifier Engine", () => {
       };
       expect(() => PaymentMandateSchema.parse(invalid)).toThrow(MandateSchemaValidationError);
     });
+
+    it("converts between AP2 Amount and @tessera/core Money", () => {
+      const amount = { amount: 19999, currency: "USD" };
+      const money = amountToMoney(amount);
+      expect(money).toBeInstanceOf(Money);
+      expect(money.amount).toBe(19999);
+      expect(money.currency).toBe("USD");
+
+      const convertedBack = moneyToAmount(money);
+      expect(convertedBack).toEqual(amount);
+    });
   });
 
   describe("Full Mandate Verification Pipeline (Ticket 02.2 & 02.3)", () => {
@@ -146,6 +161,22 @@ describe("AP2 Mandate Verifier Engine", () => {
       ).rejects.toThrow(ExpiredMandateError);
     });
 
+    it("rejects mandates with exp <= iat (inverted timestamps)", async () => {
+      const invertedPayload = {
+        ...validPaymentPayload,
+        iat: now,
+        exp: now - 10,
+      };
+      const signed = signMandate(invertedPayload, agentKeys.privateKey, agentKeys.publicKey);
+
+      await expect(
+        verifyPaymentMandate(signed, {
+          publicKey: agentKeys.publicKey,
+          nowEpochSeconds: now - 20,
+        }),
+      ).rejects.toThrow(MandateSchemaValidationError);
+    });
+
     it("rejects mandates issued in the future beyond tolerance skew", async () => {
       const futurePayload = {
         ...validPaymentPayload,
@@ -181,6 +212,56 @@ describe("AP2 Mandate Verifier Engine", () => {
       ).rejects.toThrow(DuplicateMandateNonceError);
     });
 
+    it("leaves nonce unused if mandate signature is forged / invalid", async () => {
+      const nonceStore = new InMemoryNonceStore();
+      const forgedSigned: SignedMandate<typeof validPaymentPayload> = {
+        mandate: {
+          ...validPaymentPayload,
+          nonce: "forged-nonce-999",
+        },
+        signature: Buffer.alloc(64, 0xbb).toString("base64url"), // Invalid signature
+      };
+
+      await expect(
+        verifyPaymentMandate(forgedSigned, {
+          publicKey: agentKeys.publicKey,
+          nonceStore,
+        }),
+      ).rejects.toThrow(InvalidMandateSignatureError);
+
+      // Verify the nonce was NOT consumed
+      expect(await nonceStore.hasNonce("forged-nonce-999")).toBe(false);
+    });
+
+    it("requires nonce and exp when replay protection is enabled via nonceStore", async () => {
+      const nonceStore = new InMemoryNonceStore();
+      const payloadMissingNonce = {
+        ...validPaymentPayload,
+        nonce: undefined,
+      };
+      const signed = signMandate(payloadMissingNonce, agentKeys.privateKey);
+
+      await expect(
+        verifyPaymentMandate(signed, {
+          publicKey: agentKeys.publicKey,
+          nonceStore,
+        }),
+      ).rejects.toThrow(MandateSchemaValidationError);
+
+      const payloadMissingExp = {
+        ...validPaymentPayload,
+        exp: undefined,
+      };
+      const signedNoExp = signMandate(payloadMissingExp, agentKeys.privateKey);
+
+      await expect(
+        verifyPaymentMandate(signedNoExp, {
+          publicKey: agentKeys.publicKey,
+          nonceStore,
+        }),
+      ).rejects.toThrow(MandateSchemaValidationError);
+    });
+
     it("rejects mutated payload with InvalidMandateSignatureError", async () => {
       const signed = signMandate(validPaymentPayload, agentKeys.privateKey, agentKeys.publicKey);
 
@@ -202,12 +283,65 @@ describe("AP2 Mandate Verifier Engine", () => {
         }),
       ).rejects.toThrow(InvalidMandateSignatureError);
     });
+
+    it("verifies signatures over original mandate preserving additional SD-JWT claims", async () => {
+      const extraClaimsPayload = {
+        ...validPaymentPayload,
+        _sd_alg: "sha-256",
+        custom_claim: "audited",
+      };
+
+      const signed = signMandate(extraClaimsPayload, agentKeys.privateKey);
+      const verified = await verifyPaymentMandate(signed, {
+        publicKey: agentKeys.publicKey,
+      });
+
+      expect(verified).toBeDefined();
+      expect((verified as Record<string, unknown>)._sd_alg).toBe("sha-256");
+    });
+
+    it("rejects missing public key options with InvalidMandateSignatureError", async () => {
+      const signed = signMandate(validPaymentPayload, agentKeys.privateKey);
+      await expect(
+        verifyPaymentMandate(signed, null as unknown as MandateVerificationOptions),
+      ).rejects.toThrow(InvalidMandateSignatureError);
+      await expect(
+        verifyPaymentMandate(signed, {} as unknown as MandateVerificationOptions),
+      ).rejects.toThrow(InvalidMandateSignatureError);
+    });
   });
 
   describe("SD-JWT Hash Chaining & Transaction Binding", () => {
     it("confirms cryptographic binding between Checkout Mandate and Payment Mandate", () => {
       const isBound = verifyMandateBinding(validCheckoutPayload, validPaymentPayload);
       expect(isBound).toBe(true);
+    });
+
+    it("rejects Checkout Mandate when checkout_hash does not match hash of checkout_jwt", async () => {
+      const badCheckoutPayload = {
+        ...validCheckoutPayload,
+        checkout_hash: "wrong-checkout-hash",
+      };
+      const signed = signMandate(badCheckoutPayload, agentKeys.privateKey);
+
+      await expect(
+        verifyCheckoutMandate(signed, { publicKey: agentKeys.publicKey }),
+      ).rejects.toThrow(MandateBindingMismatchError);
+    });
+
+    it("throws MandateBindingMismatchError in verifyMandateBinding when checkout_hash is invalid", () => {
+      const badCheckoutPayload = {
+        ...validCheckoutPayload,
+        checkout_hash: "wrong-checkout-hash",
+      };
+      const badPaymentPayload = {
+        ...validPaymentPayload,
+        transaction_id: "wrong-checkout-hash",
+      };
+
+      expect(() => verifyMandateBinding(badCheckoutPayload, badPaymentPayload)).toThrow(
+        MandateBindingMismatchError,
+      );
     });
 
     it("throws MandateBindingMismatchError when transaction_id does not match checkout_hash", () => {
