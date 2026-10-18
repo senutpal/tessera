@@ -99,13 +99,23 @@ export class HITLQueue {
     } = options;
 
     // Prevent duplicate pending items for the same mandate transaction_id
+    const incomingHash = computeCanonicalMandateHash(mandate);
     for (const existing of this.items.values()) {
       if (
         existing.mandate.transaction_id === mandate.transaction_id &&
         existing.status === HITLQueueStatus.PENDING_HUMAN_APPROVAL &&
         createdAt <= existing.expiresAt
       ) {
-        return existing;
+        if (
+          existing.agentId === agentId &&
+          computeCanonicalMandateHash(existing.mandate) === incomingHash
+        ) {
+          return existing;
+        }
+        throw new InvalidQueueStateError(
+          `A different mandate with transaction_id "${mandate.transaction_id}" is already pending review`,
+          { transactionId: mandate.transaction_id, existingQueueId: existing.id },
+        );
       }
     }
 

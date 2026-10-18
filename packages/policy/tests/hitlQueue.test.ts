@@ -384,6 +384,52 @@ describe("HITL Escalation Queue & Supervisor Counter-Signatures", () => {
     expect(queue.getPendingItems(now + 2000).length).toBe(1);
   });
 
+  it("rejects enqueue with existing transaction_id but differing mandate content or agentId", () => {
+    const queue = new HITLQueue(config);
+    const mandate1 = createSampleMandate();
+    const now = 1_700_000_000_000;
+
+    queue.enqueue({
+      agentId: "agent-001",
+      mandate: mandate1,
+      transactionAmount: Money.fromCents(30000, "USD"),
+      riskScore: 80,
+      riskTier: RiskTier.CRITICAL_HITL,
+      rationale: ["First enqueue"],
+      createdAt: now,
+    });
+
+    // 1. Same transaction_id but different agentId -> throws InvalidQueueStateError
+    expect(() =>
+      queue.enqueue({
+        agentId: "agent-ATTACKER",
+        mandate: mandate1,
+        transactionAmount: Money.fromCents(30000, "USD"),
+        riskScore: 80,
+        riskTier: RiskTier.CRITICAL_HITL,
+        rationale: ["Different agent"],
+        createdAt: now + 500,
+      }),
+    ).toThrow(InvalidQueueStateError);
+
+    // 2. Same transaction_id and agentId, but different mandate amount -> throws InvalidQueueStateError
+    const mandate2 = {
+      ...mandate1,
+      payment_amount: { amount: 99999, currency: "USD" },
+    };
+    expect(() =>
+      queue.enqueue({
+        agentId: "agent-001",
+        mandate: mandate2,
+        transactionAmount: Money.fromCents(99999, "USD"),
+        riskScore: 80,
+        riskTier: RiskTier.CRITICAL_HITL,
+        rationale: ["Tampered mandate"],
+        createdAt: now + 500,
+      }),
+    ).toThrow(InvalidQueueStateError);
+  });
+
   it("validates supervisor decision string and rejects invalid values", () => {
     const queue = new HITLQueue(config);
     const mandate = createSampleMandate();
