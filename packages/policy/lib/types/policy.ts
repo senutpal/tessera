@@ -37,7 +37,7 @@ export class VelocityLimitExceededError extends PolicyRuleViolationError {
     message = "Rolling spend velocity limit exceeded",
     details: Record<string, unknown> = {},
   ) {
-    super(message, "LIMIT_EXCEEDED", details);
+    super(message, "VELOCITY_LIMIT_EXCEEDED", details);
   }
 }
 

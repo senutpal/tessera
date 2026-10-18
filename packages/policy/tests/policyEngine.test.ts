@@ -191,6 +191,17 @@ describe("Policy Engine Evaluation", () => {
         timestamp: now + 2000,
       }),
     ).toThrow(VelocityLimitExceededError);
+
+    try {
+      engine.evaluate({
+        agentId: "agent-vel",
+        mandate: mandateOverLimit,
+        timestamp: now + 2000,
+      });
+    } catch (err) {
+      expect(err instanceof VelocityLimitExceededError).toBe(true);
+      expect((err as VelocityLimitExceededError).code).toBe("VELOCITY_LIMIT_EXCEEDED");
+    }
   });
 
   it("enforces rolling 1-hour spending velocity limit", () => {
