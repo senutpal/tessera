@@ -16,8 +16,14 @@ import {
   type SupervisorApprovalPayload,
   type SupervisorApprovalSubmission,
   UnauthorizedSupervisorError,
+  VelocityLimitExceededError,
 } from "../types/policy.js";
-import type { VelocityTracker } from "../velocity/velocityTracker.js";
+import {
+  ONE_HOUR_MS,
+  THIRTY_DAYS_MS,
+  TWENTY_FOUR_HOURS_MS,
+  type VelocityTracker,
+} from "../velocity/velocityTracker.js";
 
 export const DEFAULT_HITL_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -295,7 +301,74 @@ export class HITLQueue {
       );
     }
 
-    // 3. Transition queue state
+    // 3. Re-verify velocity limits before approving
+    if (submission.decision === "APPROVE" && this.velocityTracker) {
+      const amount = item.transactionAmount;
+
+      // Check 24-hour velocity limit
+      if (
+        !this.velocityTracker.checkSpendLimit(
+          item.agentId,
+          amount,
+          this.config.maxVelocity24h,
+          TWENTY_FOUR_HOURS_MS,
+          effectiveNow,
+        )
+      ) {
+        throw new VelocityLimitExceededError(
+          `Rolling 24-hour velocity limit of ${this.config.maxVelocity24h.toDecimalString()} ${this.config.maxVelocity24h.currency} exceeded upon HITL approval`,
+          {
+            agentId: item.agentId,
+            limit: this.config.maxVelocity24h.toJSON(),
+            amount: amount.toJSON(),
+          },
+        );
+      }
+
+      // Check 1-hour velocity limit if configured
+      if (
+        this.config.maxVelocity1h &&
+        !this.velocityTracker.checkSpendLimit(
+          item.agentId,
+          amount,
+          this.config.maxVelocity1h,
+          ONE_HOUR_MS,
+          effectiveNow,
+        )
+      ) {
+        throw new VelocityLimitExceededError(
+          `Rolling 1-hour velocity limit of ${this.config.maxVelocity1h.toDecimalString()} ${this.config.maxVelocity1h.currency} exceeded upon HITL approval`,
+          {
+            agentId: item.agentId,
+            limit: this.config.maxVelocity1h.toJSON(),
+            amount: amount.toJSON(),
+          },
+        );
+      }
+
+      // Check 30-day velocity limit if configured
+      if (
+        this.config.maxMonthlySpend &&
+        !this.velocityTracker.checkSpendLimit(
+          item.agentId,
+          amount,
+          this.config.maxMonthlySpend,
+          THIRTY_DAYS_MS,
+          effectiveNow,
+        )
+      ) {
+        throw new VelocityLimitExceededError(
+          `Rolling 30-day velocity limit of ${this.config.maxMonthlySpend.toDecimalString()} ${this.config.maxMonthlySpend.currency} exceeded upon HITL approval`,
+          {
+            agentId: item.agentId,
+            limit: this.config.maxMonthlySpend.toJSON(),
+            amount: amount.toJSON(),
+          },
+        );
+      }
+    }
+
+    // 4. Transition queue state
     const resolvedStatus =
       submission.decision === "APPROVE"
         ? HITLQueueStatus.APPROVED_BY_SUPERVISOR
@@ -310,7 +383,7 @@ export class HITLQueue {
 
     this.items.set(submission.queueId, resolvedItem);
 
-    // 4. Automatically record approved spend into velocity tracker
+    // 5. Automatically record approved spend into velocity tracker
     if (submission.decision === "APPROVE" && this.velocityTracker) {
       this.velocityTracker.recordSpend(item.agentId, item.transactionAmount, effectiveNow);
     }

@@ -13,6 +13,7 @@ import {
   signSupervisorApproval,
   submitSupervisorApproval,
   UnauthorizedSupervisorError,
+  VelocityLimitExceededError,
   VelocityTracker,
 } from "../index.js";
 
@@ -358,6 +359,43 @@ describe("HITL Escalation Queue & Supervisor Counter-Signatures", () => {
 
     // After approval: velocity reflects the $450.00 spend!
     expect(tracker.getVelocity24h("agent-spend-test", "USD", now + 6000).amount).toBe(45000);
+  });
+
+  it("rejects approval with VelocityLimitExceededError if velocity limit is exceeded at approval time", () => {
+    const tracker = new VelocityTracker();
+    const queue = new HITLQueue(config, { velocityTracker: tracker });
+    const mandate = createSampleMandate("tx-vel-recheck-001");
+    const now = 1_700_000_000_000;
+
+    const item = queue.enqueue({
+      agentId: "agent-vel-recheck",
+      mandate,
+      transactionAmount: Money.fromCents(200000, "USD"), // $2,000.00
+      riskScore: 75,
+      riskTier: RiskTier.CRITICAL_HITL,
+      rationale: ["High value"],
+      createdAt: now,
+    });
+
+    // While item is pending review, autonomous spend happens: $4,000.00 spend is recorded
+    // Max 24h limit is $5,000.00. Current spend $4,000.00 + pending $2,000.00 = $6,000.00 > $5,000.00
+    tracker.recordSpend("agent-vel-recheck", Money.fromCents(400000, "USD"), now + 1000);
+
+    const payload = createSupervisorApprovalPayload(item.id, mandate, "APPROVE", now + 5000);
+    const signature = signSupervisorApproval(payload, supervisorKeys.privateKey);
+
+    expect(() =>
+      queue.submitSupervisorApproval(
+        {
+          queueId: item.id,
+          supervisorPublicKey: supervisorKeys.publicKey,
+          signature,
+          decision: "APPROVE",
+          timestamp: now + 5000,
+        },
+        now + 5000,
+      ),
+    ).toThrow(VelocityLimitExceededError);
   });
 
   it("deduplicates pending items for the same mandate transaction_id", () => {
