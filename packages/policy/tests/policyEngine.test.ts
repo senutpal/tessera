@@ -569,4 +569,14 @@ describe("Policy Engine Evaluation", () => {
     });
     expect(result2.approved).toBe(true);
   });
+
+  it("rejects configuration with mismatched limit currencies in constructor", () => {
+    const invalidConfig: PolicyConfig = {
+      ...baseConfig,
+      maxVelocity24h: Money.fromCents(500000, "EUR"), // baseConfig is USD
+    };
+    expect(() => new PolicyEngine(invalidConfig)).toThrow(
+      'PolicyConfig.maxVelocity24h currency "EUR" must match base limit currency "USD"',
+    );
+  });
 });

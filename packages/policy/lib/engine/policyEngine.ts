@@ -1,4 +1,4 @@
-import { RiskTier } from "@tessera/core";
+import { type Money, RiskTier } from "@tessera/core";
 import { amountToMoney, PaymentMandateSchema } from "@tessera/mandates";
 import { HITLQueue } from "../hitl/hitlQueue.js";
 import { RiskScorer } from "../risk/riskScorer.js";
@@ -215,6 +215,21 @@ export class PolicyEngine {
   public readonly riskScorer: RiskScorer;
 
   constructor(config: PolicyConfig, options: PolicyEngineOptions = {}) {
+    const baseCurrency = config.maxAmountPerTransaction.currency;
+    const limits: Record<string, Money | undefined> = {
+      maxVelocity24h: config.maxVelocity24h,
+      maxVelocity1h: config.maxVelocity1h,
+      maxMonthlySpend: config.maxMonthlySpend,
+      autoApprovalLimit: config.autoApprovalLimit,
+    };
+    for (const [name, limit] of Object.entries(limits)) {
+      if (limit && limit.currency !== baseCurrency) {
+        throw new Error(
+          `PolicyConfig.${name} currency "${limit.currency}" must match base limit currency "${baseCurrency}"`,
+        );
+      }
+    }
+
     this.config = config;
     this.velocityTracker = options.velocityTracker ?? new VelocityTracker();
     this.hitlQueue =
