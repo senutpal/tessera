@@ -1,6 +1,7 @@
 import { Money } from "@tessera/core";
 import { describe, expect, it } from "vitest";
 import {
+  Channel3ValidationError,
   isDomainWhitelisted,
   normalizeConstraints,
   optimizeQuote,
@@ -47,9 +48,17 @@ describe("Autonomous Quote Optimizer", () => {
       expect(isDomainWhitelisted("fake-nike.com", ["nike.com"])).toBe(false);
     });
 
-    it("matches explicit wildcard patterns", () => {
+    it("matches explicit wildcard patterns and universal wildcards", () => {
       expect(isDomainWhitelisted("deals.target.com", ["*.target.com"])).toBe(true);
       expect(isDomainWhitelisted("target.com", ["*.target.com"])).toBe(true);
+      expect(isDomainWhitelisted("nike.com", ["*"])).toBe(true);
+      expect(isDomainWhitelisted("nike.com", ["all"])).toBe(true);
+    });
+
+    it("normalizes protocol, www, and URL paths when comparing whitelist patterns", () => {
+      expect(isDomainWhitelisted("nike.com", ["https://www.nike.com"])).toBe(true);
+      expect(isDomainWhitelisted("nike.com", ["www.nike.com"])).toBe(true);
+      expect(isDomainWhitelisted("https://www.nike.com/shoes", ["nike.com"])).toBe(true);
     });
   });
 
@@ -135,17 +144,109 @@ describe("Autonomous Quote Optimizer", () => {
       expect(unverified?.rejectionReasons[0]).toContain("not in mandate allowed whitelist");
     });
 
-    it("prioritizes preferred merchants when specified", () => {
+    it("prioritizes preferred merchants when specified (supporting case and url normalization)", () => {
       const product = buildTestProduct("prod_mouse", "Logitech MX Master 3S", [
         { domain: "amazon.com", cents: 9999, inStock: true, days: 2 },
         { domain: "bestbuy.com", cents: 9999, inStock: true, days: 2 },
       ]);
 
       const result = optimizeQuote([product], {
-        preferredMerchants: ["bestbuy.com"],
+        preferredMerchants: ["BestBuy.com"],
       });
 
       expect(result.optimalQuote?.merchantDomain).toBe("bestbuy.com");
+
+      const resultUrl = optimizeQuote([product], {
+        preferredMerchants: ["https://www.bestbuy.com"],
+      });
+      expect(resultUrl.optimalQuote?.merchantDomain).toBe("bestbuy.com");
+    });
+
+    it("rejects offers with mismatched currencies without throwing unhandled errors", () => {
+      const product: ProcurementProduct = {
+        id: "prod_intl",
+        title: "International Item",
+        offers: [
+          {
+            offerId: "prod_intl:amazon.co.uk",
+            merchantDomain: "amazon.co.uk",
+            productUrl: "https://amazon.co.uk/item",
+            price: Money.fromMinorUnits(5000, "GBP"),
+            inStock: true,
+            shippingDurationIso: "P2D",
+            estimatedDeliveryDays: 2,
+          },
+          {
+            offerId: "prod_intl:amazon.com",
+            merchantDomain: "amazon.com",
+            productUrl: "https://amazon.com/item",
+            price: Money.fromMinorUnits(7000, "USD"),
+            inStock: true,
+            shippingDurationIso: "P2D",
+            estimatedDeliveryDays: 2,
+          },
+        ],
+      };
+
+      const result = optimizeQuote([product], {
+        maxBudget: Money.fromMinorUnits(10000, "USD"),
+      });
+
+      expect(result.optimalQuote?.merchantDomain).toBe("amazon.com");
+      const gbpQuote = result.quotes.find((q) => q.merchantDomain === "amazon.co.uk");
+      expect(gbpQuote?.status).toBe("CURRENCY_MISMATCH");
+      expect(gbpQuote?.rejectionReasons[0]).toContain("does not match");
+    });
+
+    it("throws Channel3ValidationError on negative budget constraints", () => {
+      const product = buildTestProduct("prod_budget", "Item", [
+        { domain: "bestbuy.com", cents: 5000, inStock: true, days: 2 },
+      ]);
+
+      expect(() =>
+        optimizeQuote([product], {
+          maxBudget: -100,
+        }),
+      ).toThrow(Channel3ValidationError);
+
+      expect(() =>
+        optimizeQuote([product], {
+          maxBudget: { amount: -5000, currency: "USD" },
+        }),
+      ).toThrow(Channel3ValidationError);
+    });
+
+    it("flags candidate offers with invalid negative prices as ineligible", () => {
+      const product: ProcurementProduct = {
+        id: "prod_exploit",
+        title: "Exploit Product",
+        offers: [
+          {
+            offerId: "prod_exploit:sketchy.com",
+            merchantDomain: "sketchy.com",
+            productUrl: "https://sketchy.com/deal",
+            price: Money.fromMinorUnits(-5000, "USD"),
+            inStock: true,
+            shippingDurationIso: "P1D",
+            estimatedDeliveryDays: 1,
+          },
+          {
+            offerId: "prod_exploit:legit.com",
+            merchantDomain: "legit.com",
+            productUrl: "https://legit.com/deal",
+            price: Money.fromMinorUnits(5000, "USD"),
+            inStock: true,
+            shippingDurationIso: "P2D",
+            estimatedDeliveryDays: 2,
+          },
+        ],
+      };
+
+      const result = optimizeQuote([product], {});
+      expect(result.optimalQuote?.merchantDomain).toBe("legit.com");
+      const sketchyQuote = result.quotes.find((q) => q.merchantDomain === "sketchy.com");
+      expect(sketchyQuote?.status).toBe("EXCEEDS_BUDGET");
+      expect(sketchyQuote?.rejectionReasons[0]).toContain("negative price");
     });
 
     it("extracts constraints from an AP2 Mandate object structure", () => {

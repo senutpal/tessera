@@ -141,7 +141,8 @@ export type QuoteEvaluationStatus =
   | "EXCEEDS_BUDGET"
   | "DISALLOWED_MERCHANT"
   | "SLA_BREACH"
-  | "OUT_OF_STOCK";
+  | "OUT_OF_STOCK"
+  | "CURRENCY_MISMATCH";
 
 export interface ProcurementQuote {
   quoteId: string;

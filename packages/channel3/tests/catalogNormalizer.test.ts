@@ -50,6 +50,14 @@ describe("Catalog Normalizer & Canonical Representation", () => {
       const cad = parsePriceToMoney("CAD 75.00");
       expect(cad.currency).toBe("CAD");
       expect(cad.toMinorUnits()).toBe(7500);
+
+      const cadSymbol = parsePriceToMoney("C$199.99");
+      expect(cadSymbol.currency).toBe("CAD");
+      expect(cadSymbol.toMinorUnits()).toBe(19999);
+
+      const audSymbol = parsePriceToMoney("A$50.00");
+      expect(audSymbol.currency).toBe("AUD");
+      expect(audSymbol.toMinorUnits()).toBe(5000);
     });
 
     it("parses Channel3 PriceWire object structures", () => {
@@ -80,13 +88,22 @@ describe("Catalog Normalizer & Canonical Representation", () => {
       expect(result).toBe(orig);
     });
 
-    it("throws Channel3ValidationError on invalid price inputs", () => {
+    it("throws Channel3ValidationError on invalid price inputs and negative amounts", () => {
       expect(() => parsePriceToMoney(null)).toThrow(Channel3ValidationError);
       expect(() => parsePriceToMoney(undefined)).toThrow(Channel3ValidationError);
       expect(() => parsePriceToMoney("")).toThrow(Channel3ValidationError);
       expect(() => parsePriceToMoney("free")).toThrow(Channel3ValidationError);
       expect(() => parsePriceToMoney(NaN)).toThrow(Channel3ValidationError);
       expect(() => parsePriceToMoney(Infinity)).toThrow(Channel3ValidationError);
+      expect(() => parsePriceToMoney(-50)).toThrow(Channel3ValidationError);
+      expect(() => parsePriceToMoney("-19.99")).toThrow(Channel3ValidationError);
+      expect(() => parsePriceToMoney("-$50.00")).toThrow(Channel3ValidationError);
+      expect(() => parsePriceToMoney({ amount: -100, currency: "USD" })).toThrow(
+        Channel3ValidationError,
+      );
+      expect(() => parsePriceToMoney({ value: "-10.00", currency_code: "USD" })).toThrow(
+        Channel3ValidationError,
+      );
     });
   });
 
@@ -94,18 +111,23 @@ describe("Catalog Normalizer & Canonical Representation", () => {
     it("handles ISO 8601 duration strings directly", () => {
       expect(parseShippingEstimate("P2D")).toEqual({ days: 2, isoDuration: "P2D" });
       expect(parseShippingEstimate("p5d")).toEqual({ days: 5, isoDuration: "P5D" });
+      expect(parseShippingEstimate("P1W")).toEqual({ days: 7, isoDuration: "P7D" });
+      expect(parseShippingEstimate("p2w")).toEqual({ days: 14, isoDuration: "P14D" });
     });
 
     it("normalizes range estimates by taking the upper SLA bound", () => {
       expect(parseShippingEstimate("3-5 business days")).toEqual({ days: 5, isoDuration: "P5D" });
       expect(parseShippingEstimate("1 to 3 days")).toEqual({ days: 3, isoDuration: "P3D" });
       expect(parseShippingEstimate("5-7 days")).toEqual({ days: 7, isoDuration: "P7D" });
+      expect(parseShippingEstimate("1-2 weeks")).toEqual({ days: 14, isoDuration: "P14D" });
+      expect(parseShippingEstimate("2 weeks")).toEqual({ days: 14, isoDuration: "P14D" });
     });
 
     it("normalizes common expedited speed phrases", () => {
       expect(parseShippingEstimate("Same Day Delivery")).toEqual({ days: 1, isoDuration: "P1D" });
       expect(parseShippingEstimate("Next day delivery")).toEqual({ days: 1, isoDuration: "P1D" });
       expect(parseShippingEstimate("Overnight")).toEqual({ days: 1, isoDuration: "P1D" });
+      expect(parseShippingEstimate("get it tomorrow")).toEqual({ days: 1, isoDuration: "P1D" });
       expect(parseShippingEstimate("2-day shipping")).toEqual({ days: 2, isoDuration: "P2D" });
       expect(parseShippingEstimate("Express")).toEqual({ days: 2, isoDuration: "P2D" });
     });

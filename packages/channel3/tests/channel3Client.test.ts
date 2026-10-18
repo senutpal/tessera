@@ -3,6 +3,7 @@ import {
   Channel3Client,
   Channel3McpError,
   Channel3TimeoutError,
+  Channel3ValidationError,
   type SearchProductsResultWire,
   searchProducts,
 } from "../index.js";
@@ -313,5 +314,119 @@ describe("Channel3Client MCP Engine", () => {
     const result = await searchProducts({ fetch: mockFetch }, { query: "drone" });
     expect(result.products).toHaveLength(1);
     expect(result.products[0]?.title).toContain("Sony WH-1000XM5");
+  });
+
+  it("throws Channel3ValidationError without making fetch calls when search criteria are missing", async () => {
+    const mockFetch = vi.fn();
+    const client = new Channel3Client({ fetch: mockFetch as unknown as typeof globalThis.fetch });
+
+    await expect(client.searchProducts({})).rejects.toThrow(Channel3ValidationError);
+    await expect(client.searchProducts({ query: "   " })).rejects.toThrow(Channel3ValidationError);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("propagates MCP tool execution errors (result.isError) without retrying", async () => {
+    let callCount = 0;
+    const mockFetch = vi.fn(async () => {
+      callCount++;
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "req_err_tool",
+          result: {
+            isError: true,
+            content: [{ type: "text", text: "Error: Retailer API rate limit exceeded" }],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof globalThis.fetch;
+
+    const client = new Channel3Client({ fetch: mockFetch, maxRetries: 3 });
+
+    await expect(client.searchProducts({ query: "monitor" })).rejects.toThrow(
+      "MCP Tool Execution Error: Error: Retailer API rate limit exceeded",
+    );
+    // Tool execution errors are deterministic application errors and should not trigger HTTP retries
+    expect(callCount).toBe(1);
+  });
+
+  it("unwraps JSON payload wrapped in markdown code blocks within text content", async () => {
+    const mockWire = createMockWireResponse();
+    const markdownText = `Here are the search results:\n\`\`\`json\n${JSON.stringify(mockWire)}\n\`\`\`\nHope this helps!`;
+
+    const mockFetch = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "req_md",
+          result: {
+            content: [{ type: "text", text: markdownText }],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof globalThis.fetch;
+
+    const client = new Channel3Client({ fetch: mockFetch });
+    const result = await client.searchProducts({ query: "sony" });
+
+    expect(result.products).toHaveLength(1);
+    expect(result.thread_id).toBe("thread_sess_xyz789");
+  });
+
+  it("handles pagination via nextPage helper method", async () => {
+    const page1Wire = createMockWireResponse({
+      next_page_token: "tok_page_2",
+      thread_id: "thread_p1",
+    });
+    const page2Wire = createMockWireResponse({
+      products: [],
+      next_page_token: null,
+      thread_id: "thread_p2",
+    });
+
+    let callCount = 0;
+    const capturedArgs: Record<string, unknown>[] = [];
+
+    const mockFetch = vi.fn(async (_url, init) => {
+      callCount++;
+      const body = JSON.parse(String(init?.body));
+      capturedArgs.push(body.params.arguments);
+
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: { structuredContent: callCount === 1 ? page1Wire : page2Wire },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof globalThis.fetch;
+
+    const client = new Channel3Client({ fetch: mockFetch });
+    const page1 = await client.searchProducts({ query: "sneakers" });
+    expect(page1.next_page_token).toBe("tok_page_2");
+
+    const page2 = await client.nextPage(page1);
+    expect(page2).not.toBeNull();
+    expect(capturedArgs[1]?.page_token).toBe("tok_page_2");
+    expect(capturedArgs[1]?.thread_id).toBe("thread_p1");
+
+    // When next_page_token is null, nextPage returns null
+    const page3 = await client.nextPage(page2 as SearchProductsResultWire);
+    expect(page3).toBeNull();
+    expect(callCount).toBe(2);
+  });
+
+  it("provides thread isolation via withThread without mutating parent client", async () => {
+    const client = new Channel3Client({ threadId: "parent_thread" });
+    const scopedClient = client.withThread("child_thread");
+
+    expect(client.threadId).toBe("parent_thread");
+    expect(scopedClient.threadId).toBe("child_thread");
+
+    scopedClient.threadId = "mutated_child_thread";
+    expect(client.threadId).toBe("parent_thread");
   });
 });

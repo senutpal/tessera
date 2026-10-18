@@ -14,8 +14,53 @@ import {
  * For integer numbers, treats them as minor units (cents) per AP2 protocol specification.
  * For decimal numbers or strings, treats them as standard currency amounts.
  */
+/**
+ * Safely cleans a domain or whitelist pattern into a canonical domain without protocol, www, port, or path.
+ */
+function cleanDomainPattern(pattern: string): string {
+  let cleaned = pattern.trim().toLowerCase();
+  if (cleaned === "*" || cleaned === "all") {
+    return "*";
+  }
+  if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) {
+    try {
+      cleaned = new URL(cleaned).hostname;
+    } catch {
+      cleaned = cleaned.replace(/^https?:\/\//, "");
+    }
+  }
+  const slashIdx = cleaned.indexOf("/");
+  if (slashIdx !== -1) {
+    cleaned = cleaned.slice(0, slashIdx);
+  }
+  const qIdx = cleaned.indexOf("?");
+  if (qIdx !== -1) {
+    cleaned = cleaned.slice(0, qIdx);
+  }
+  const hashIdx = cleaned.indexOf("#");
+  if (hashIdx !== -1) {
+    cleaned = cleaned.slice(0, hashIdx);
+  }
+  const portIdx = cleaned.indexOf(":");
+  if (portIdx !== -1) {
+    cleaned = cleaned.slice(0, portIdx);
+  }
+  if (cleaned.startsWith("www.")) {
+    cleaned = cleaned.slice(4);
+  }
+  return cleaned;
+}
+
+/**
+ * Parses budget constraints into a Money instance.
+ * For integer numbers, treats them as minor units (cents) per AP2 protocol specification.
+ * For decimal numbers or strings, treats them as standard currency amounts.
+ */
 export function parseBudgetConstraint(val: unknown, currency = "USD"): Money {
   if (val instanceof Money) {
+    if (val.amount < 0) {
+      throw new Channel3ValidationError("Budget cannot be negative", { val });
+    }
     return val;
   }
 
@@ -26,6 +71,9 @@ export function parseBudgetConstraint(val: unknown, currency = "USD"): Money {
   if (typeof val === "object") {
     if ("amount" in val && typeof (val as { amount: unknown }).amount === "number") {
       const amtObj = val as { amount: number; currency?: string };
+      if (amtObj.amount < 0) {
+        throw new Channel3ValidationError("Budget cannot be negative", { val });
+      }
       return Money.fromMinorUnits(amtObj.amount, amtObj.currency ?? currency);
     }
     return parsePriceToMoney(val, currency);
@@ -35,10 +83,13 @@ export function parseBudgetConstraint(val: unknown, currency = "USD"): Money {
     if (!Number.isFinite(val) || Number.isNaN(val)) {
       throw new Channel3ValidationError(`Invalid numeric budget: ${val}`);
     }
+    if (val < 0) {
+      throw new Channel3ValidationError(`Budget cannot be negative: ${val}`);
+    }
     if (Number.isInteger(val)) {
       return Money.fromMinorUnits(val, currency);
     }
-    return Money.fromDecimalString(val.toFixed(2), currency);
+    return Money.fromDecimalString(val.toString(), currency);
   }
 
   if (typeof val === "string") {
@@ -51,24 +102,24 @@ export function parseBudgetConstraint(val: unknown, currency = "USD"): Money {
 /**
  * Checks if a candidate domain matches an allowed domain whitelist pattern.
  * Supports exact domain matches, subdomains (e.g. "store.nike.com" matches "nike.com"),
- * and explicit wildcards (e.g. "*.nike.com").
+ * explicit wildcards (e.g. "*.nike.com"), and universal wildcard "*".
  */
 export function isDomainWhitelisted(domain: string, allowedDomains: readonly string[]): boolean {
   if (!domain || typeof domain !== "string" || !allowedDomains || allowedDomains.length === 0) {
     return false;
   }
 
-  const normDomain = domain.toLowerCase().trim();
+  const normDomain = cleanDomainPattern(domain);
 
-  return allowedDomains.some((pattern) => {
-    if (!pattern || typeof pattern !== "string") {
+  return allowedDomains.some((rawPattern) => {
+    if (!rawPattern || typeof rawPattern !== "string") {
       return false;
     }
-    const cleanPattern = pattern
-      .trim()
-      .toLowerCase()
-      .replace(/^https?:\/\//, "")
-      .replace(/\/+$/, "");
+    const cleanPattern = cleanDomainPattern(rawPattern);
+
+    if (cleanPattern === "*") {
+      return true;
+    }
 
     if (cleanPattern.startsWith("*.")) {
       const rootDomain = cleanPattern.slice(2);
@@ -118,26 +169,18 @@ export function normalizeConstraints(
 
   const allowedDomains: string[] = [];
   if ("allowedDomains" in rawMandate && Array.isArray(rawMandate.allowedDomains)) {
-    allowedDomains.push(...rawMandate.allowedDomains.map(String));
+    allowedDomains.push(...rawMandate.allowedDomains.map(cleanDomainPattern).filter(Boolean));
   } else if ("merchant_whitelist" in rawMandate && Array.isArray(rawMandate.merchant_whitelist)) {
-    allowedDomains.push(...rawMandate.merchant_whitelist.map(String));
+    allowedDomains.push(...rawMandate.merchant_whitelist.map(cleanDomainPattern).filter(Boolean));
   } else if ("allowed_merchants" in rawMandate && Array.isArray(rawMandate.allowed_merchants)) {
-    allowedDomains.push(...rawMandate.allowed_merchants.map(String));
+    allowedDomains.push(...rawMandate.allowed_merchants.map(cleanDomainPattern).filter(Boolean));
   } else if ("payee" in rawMandate && rawMandate.payee && typeof rawMandate.payee === "object") {
     const payeeObj = rawMandate.payee as Record<string, unknown>;
-    if (typeof payeeObj.merchant_id === "string") {
-      allowedDomains.push(payeeObj.merchant_id);
-    }
     if (typeof payeeObj.domain === "string") {
-      allowedDomains.push(payeeObj.domain);
+      allowedDomains.push(cleanDomainPattern(payeeObj.domain));
     }
     if (typeof payeeObj.website === "string") {
-      try {
-        const u = new URL(payeeObj.website);
-        allowedDomains.push(u.hostname.replace(/^www\./, ""));
-      } catch {
-        allowedDomains.push(payeeObj.website);
-      }
+      allowedDomains.push(cleanDomainPattern(payeeObj.website));
     }
   }
 
@@ -158,7 +201,9 @@ export function normalizeConstraints(
 
   const preferredMerchants: string[] = [];
   if ("preferredMerchants" in rawMandate && Array.isArray(rawMandate.preferredMerchants)) {
-    preferredMerchants.push(...rawMandate.preferredMerchants.map(String));
+    preferredMerchants.push(
+      ...rawMandate.preferredMerchants.map(cleanDomainPattern).filter(Boolean),
+    );
   }
 
   const requireInStock =
@@ -199,8 +244,14 @@ export function optimizeQuote(
       const rejectionReasons: string[] = [];
       let status: QuoteEvaluationStatus = "ELIGIBLE";
 
+      // 0. Non-negative price check
+      if (offer.price.amount < 0) {
+        status = "EXCEEDS_BUDGET";
+        rejectionReasons.push("Product offer has an invalid negative price");
+      }
+
       // 1. Availability constraint
-      if (constraints.requireInStock !== false && !offer.inStock) {
+      if (status === "ELIGIBLE" && constraints.requireInStock !== false && !offer.inStock) {
         status = "OUT_OF_STOCK";
         rejectionReasons.push("Product offer is currently out of stock");
       }
@@ -232,10 +283,26 @@ export function optimizeQuote(
         );
       }
 
-      // 4. Budget cap constraint
+      // 4. Currency matching constraint
+      const requiredCurrency =
+        constraints.currency ??
+        (constraints.maxBudget instanceof Money ? constraints.maxBudget.currency : undefined);
+      if (status === "ELIGIBLE" && requiredCurrency && offer.price.currency !== requiredCurrency) {
+        status = "CURRENCY_MISMATCH";
+        rejectionReasons.push(
+          `Offer currency "${offer.price.currency}" does not match required currency "${requiredCurrency}"`,
+        );
+      }
+
+      // 5. Budget cap constraint
       if (status === "ELIGIBLE" && constraints.maxBudget != null) {
         const budgetMoney = parseBudgetConstraint(constraints.maxBudget, offer.price.currency);
-        if (offer.price.greaterThan(budgetMoney)) {
+        if (offer.price.currency !== budgetMoney.currency) {
+          status = "CURRENCY_MISMATCH";
+          rejectionReasons.push(
+            `Offer currency "${offer.price.currency}" does not match budget cap currency "${budgetMoney.currency}"`,
+          );
+        } else if (offer.price.greaterThan(budgetMoney)) {
           status = "EXCEEDS_BUDGET";
           rejectionReasons.push(
             `Price ${offer.price.toString()} exceeds mandate budget cap of ${budgetMoney.toString()}`,
@@ -277,12 +344,20 @@ export function optimizeQuote(
   const maxPrice = eligiblePrices.length > 0 ? Math.max(...eligiblePrices) : 1;
 
   // Sorting comparator for eligible quotes:
-  // 1. Preferred merchant bonus
+  // 1. Preferred merchant bonus (normalized domain match)
   // 2. Lowest price
   // 3. Fastest delivery speed
   eligible.sort((a, b) => {
-    const aPreferred = constraints.preferredMerchants?.includes(a.merchantDomain) ? 1 : 0;
-    const bPreferred = constraints.preferredMerchants?.includes(b.merchantDomain) ? 1 : 0;
+    const aPreferred =
+      constraints.preferredMerchants &&
+      isDomainWhitelisted(a.merchantDomain, constraints.preferredMerchants)
+        ? 1
+        : 0;
+    const bPreferred =
+      constraints.preferredMerchants &&
+      isDomainWhitelisted(b.merchantDomain, constraints.preferredMerchants)
+        ? 1
+        : 0;
     if (aPreferred !== bPreferred) {
       return bPreferred - aPreferred;
     }
@@ -313,7 +388,10 @@ export function optimizeQuote(
     }
 
     // Preferred merchant bonus
-    if (constraints.preferredMerchants?.includes(quote.merchantDomain)) {
+    if (
+      constraints.preferredMerchants &&
+      isDomainWhitelisted(quote.merchantDomain, constraints.preferredMerchants)
+    ) {
       score = Math.min(100, score + 10);
     }
 
