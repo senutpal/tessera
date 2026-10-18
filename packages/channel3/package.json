@@ -1,0 +1,25 @@
+{
+  "name": "@tessera/channel3",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "development": "./index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tessera/core": "workspace:*",
+    "@tessera/mandates": "workspace:*",
+    "zod": "^3.24.2"
+  }
+}
