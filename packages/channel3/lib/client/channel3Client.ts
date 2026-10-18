@@ -5,6 +5,7 @@ import {
   Channel3Error,
   Channel3McpError,
   Channel3TimeoutError,
+  Channel3ValidationError,
   type HighLevelSearchOptions,
   type JsonRpcRequest,
   type JsonRpcResponse,
@@ -67,6 +68,13 @@ export class Channel3Client {
    * Adheres strictly to MCP JSON-RPC 2.0 specifications.
    */
   public async searchProducts(params: SearchProductsOptions): Promise<SearchProductsResultWire> {
+    if (!params.query?.trim() && !params.imageUrl?.trim() && !params.pageToken?.trim()) {
+      throw new Channel3ValidationError(
+        "At least one of `query`, `imageUrl`, or `pageToken` is required for product search.",
+        { params },
+      );
+    }
+
     const threadIdToUse = params.threadId ?? this.currentThreadId;
 
     const rpcPayload: JsonRpcRequest = {
@@ -199,6 +207,21 @@ export class Channel3Client {
 
     if (obj.result && typeof obj.result === "object") {
       const res = obj.result as Record<string, unknown>;
+
+      // Handle MCP tool execution error
+      if (res.isError === true) {
+        const errorContent = Array.isArray(res.content)
+          ? (res.content as Array<{ type?: string; text?: string }>)
+              .map((c) => c.text)
+              .filter(Boolean)
+              .join("\n")
+          : "MCP tool returned error status";
+        throw new Channel3McpError(`MCP Tool Execution Error: ${errorContent}`, {
+          isError: true,
+          result: obj.result,
+        });
+      }
+
       if (res.structuredContent && typeof res.structuredContent === "object") {
         candidate = res.structuredContent;
       } else if (Array.isArray(res.products)) {
@@ -206,8 +229,10 @@ export class Channel3Client {
       } else if (Array.isArray(res.content)) {
         for (const item of res.content as Array<{ type?: string; text?: string }>) {
           if (item?.type === "text" && item.text) {
+            const rawText = item.text.trim();
+            // 1. Try direct JSON parse
             try {
-              const parsed = JSON.parse(item.text);
+              const parsed = JSON.parse(rawText);
               if (
                 parsed &&
                 typeof parsed === "object" &&
@@ -217,7 +242,43 @@ export class Channel3Client {
                 break;
               }
             } catch {
-              // Not JSON text, continue
+              // 2. Try extracting from markdown code block ```json ... ```
+              const codeBlockMatch = /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(rawText);
+              const textToParse = codeBlockMatch?.[1]?.trim();
+              if (textToParse) {
+                try {
+                  const parsed = JSON.parse(textToParse);
+                  if (
+                    parsed &&
+                    typeof parsed === "object" &&
+                    (parsed.products || parsed.structuredContent)
+                  ) {
+                    candidate = parsed.structuredContent ?? parsed;
+                    break;
+                  }
+                } catch {
+                  // continue
+                }
+              }
+
+              // 3. Try finding first { and last }
+              const firstBrace = rawText.indexOf("{");
+              const lastBrace = rawText.lastIndexOf("}");
+              if (firstBrace !== -1 && lastBrace > firstBrace) {
+                try {
+                  const parsed = JSON.parse(rawText.slice(firstBrace, lastBrace + 1));
+                  if (
+                    parsed &&
+                    typeof parsed === "object" &&
+                    (parsed.products || parsed.structuredContent)
+                  ) {
+                    candidate = parsed.structuredContent ?? parsed;
+                    break;
+                  }
+                } catch {
+                  // continue
+                }
+              }
             }
           }
         }
@@ -271,13 +332,48 @@ export class Channel3Client {
   }
 
   /**
+   * Fetches the next page of results using the previous response's next_page_token.
+   * Returns null if no next_page_token exists.
+   */
+  public async nextPage(
+    previousResult: SearchProductsResultWire,
+    options?: Partial<SearchProductsOptions>,
+  ): Promise<SearchProductsResultWire | null> {
+    if (!previousResult.next_page_token) {
+      return null;
+    }
+    return this.searchProducts({
+      ...options,
+      query: previousResult.query,
+      imageUrl: previousResult.image_url,
+      threadId: previousResult.thread_id,
+      pageToken: previousResult.next_page_token,
+    });
+  }
+
+  /**
+   * Creates an isolated client instance with a specific thread ID, preventing shared state mutation.
+   */
+  public withThread(threadId: string): Channel3Client {
+    return new Channel3Client({
+      endpoint: this.endpoint,
+      apiKey: this.apiKey,
+      timeoutMs: this.timeoutMs,
+      maxRetries: this.maxRetries,
+      initialBackoffMs: this.initialBackoffMs,
+      fetch: this.fetchFn,
+      threadId,
+    });
+  }
+
+  /**
    * Convenience method returning only ranked procurement quotes.
    */
   public async searchAndRank(
-    query: string,
+    queryOrOptions: string | HighLevelSearchOptions,
     constraints?: MandateQuoteConstraints,
   ): Promise<ProcurementQuote[]> {
-    const result = await this.search(query, constraints);
+    const result = await this.search(queryOrOptions, constraints);
     return result.quotes;
   }
 }

@@ -10,14 +10,18 @@ import {
 } from "../types/channel3.js";
 
 const CURRENCY_SYMBOLS: Record<string, string> = {
+  C$: "CAD",
+  A$: "AUD",
   $: "USD",
   "€": "EUR",
   "£": "GBP",
   "¥": "JPY",
   "₹": "INR",
-  C$: "CAD",
-  A$: "AUD",
 };
+
+const SORTED_CURRENCY_SYMBOLS = Object.entries(CURRENCY_SYMBOLS).sort(
+  (a, b) => b[0].length - a[0].length,
+);
 
 /**
  * Normalizes a raw domain or URL string into a clean hostname without protocol, port, path, or www prefix.
@@ -50,6 +54,10 @@ export function normalizeDomain(rawDomain: string): string {
   if (qIdx !== -1) {
     cleaned = cleaned.slice(0, qIdx);
   }
+  const hashIdx = cleaned.indexOf("#");
+  if (hashIdx !== -1) {
+    cleaned = cleaned.slice(0, hashIdx);
+  }
 
   // Strip port
   const portIdx = cleaned.indexOf(":");
@@ -74,9 +82,13 @@ export function normalizeDomain(rawDomain: string): string {
 
 /**
  * Parses raw price representations (strings, numbers, objects) into a canonical Money instance.
+ * Strictly rejects negative prices as invalid in catalog commerce.
  */
 export function parsePriceToMoney(raw: unknown, defaultCurrency = "USD"): Money {
   if (raw instanceof Money) {
+    if (raw.amount < 0) {
+      throw new Channel3ValidationError("Product price cannot be negative", { raw });
+    }
     return raw;
   }
 
@@ -92,10 +104,11 @@ export function parsePriceToMoney(raw: unknown, defaultCurrency = "USD"): Money 
     "currency" in raw &&
     typeof (raw as { currency: unknown }).currency === "string"
   ) {
-    return Money.fromMinorUnits(
-      (raw as { amount: number }).amount,
-      (raw as { currency: string }).currency,
-    );
+    const amt = (raw as { amount: number }).amount;
+    if (amt < 0) {
+      throw new Channel3ValidationError(`Product price cannot be negative: ${amt}`, { raw });
+    }
+    return Money.fromMinorUnits(amt, (raw as { currency: string }).currency);
   }
 
   // If PayPal object: { value: "199.99", currency_code: "USD" }
@@ -106,10 +119,11 @@ export function parsePriceToMoney(raw: unknown, defaultCurrency = "USD"): Money 
     "currency_code" in raw &&
     typeof (raw as { currency_code: unknown }).currency_code === "string"
   ) {
-    return Money.fromDecimalString(
-      (raw as { value: string }).value,
-      (raw as { currency_code: string }).currency_code,
-    );
+    const val = (raw as { value: string }).value.trim();
+    if (val.startsWith("-")) {
+      throw new Channel3ValidationError(`Product price cannot be negative: ${val}`, { raw });
+    }
+    return Money.fromDecimalString(val, (raw as { currency_code: string }).currency_code);
   }
 
   // If Channel3 PriceWire object: { price: number | string, currency?: string }
@@ -129,20 +143,27 @@ export function parsePriceToMoney(raw: unknown, defaultCurrency = "USD"): Money 
     if (!Number.isFinite(raw) || Number.isNaN(raw)) {
       throw new Channel3ValidationError(`Invalid numeric price value: ${raw}`);
     }
-    return Money.fromDecimalString(raw.toFixed(2), defaultCurrency);
+    if (raw < 0) {
+      throw new Channel3ValidationError(`Product price cannot be negative: ${raw}`);
+    }
+    return Money.fromDecimalString(raw.toString(), defaultCurrency);
   }
 
-  // String amount (e.g. "$199.99", "199.99", "USD 199.99", "$ 1,299.50")
+  // String amount (e.g. "$199.99", "199.99", "USD 199.99", "$ 1,299.50", "C$199.99")
   if (typeof raw === "string") {
     let str = raw.trim();
     if (!str) {
       throw new Channel3ValidationError("Price string cannot be empty");
     }
 
+    if (str.startsWith("-") || str.includes(" -")) {
+      throw new Channel3ValidationError(`Product price cannot be negative: ${raw}`, { raw });
+    }
+
     let detectedCurrency = defaultCurrency;
 
-    // Check for symbol prefix
-    for (const [sym, currCode] of Object.entries(CURRENCY_SYMBOLS)) {
+    // Check for symbol prefix (longest symbol first to prevent C$ matching $)
+    for (const [sym, currCode] of SORTED_CURRENCY_SYMBOLS) {
       if (str.includes(sym)) {
         detectedCurrency = currCode;
         str = str.replace(sym, "");
@@ -160,7 +181,11 @@ export function parsePriceToMoney(raw: unknown, defaultCurrency = "USD"): Money 
     // Strip commas and whitespace
     const cleanedNumber = str.replace(/,/g, "").trim();
 
-    if (!/^-?\d+(?:\.\d+)?$/.test(cleanedNumber)) {
+    if (cleanedNumber.startsWith("-")) {
+      throw new Channel3ValidationError(`Product price cannot be negative: ${raw}`, { raw });
+    }
+
+    if (!/^\d+(?:\.\d+)?$/.test(cleanedNumber)) {
       throw new Channel3ValidationError(
         `Unable to parse price string "${raw}" into a valid decimal amount`,
         { raw },
@@ -184,10 +209,16 @@ export function parseShippingEstimate(estimate: unknown): { days: number; isoDur
 
   const s = estimate.trim().toLowerCase();
 
-  // Check direct ISO duration (e.g. "P3D", "P5D")
+  // Check direct ISO duration (e.g. "P3D", "P5D", "P1W", "P2W")
   const isoMatch = /^p(\d+)d$/i.exec(s);
   if (isoMatch?.[1]) {
     const days = parseInt(isoMatch[1], 10);
+    return { days, isoDuration: `P${days}D` };
+  }
+  const isoWeekMatch = /^p(\d+)w$/i.exec(s);
+  if (isoWeekMatch?.[1]) {
+    const weeks = parseInt(isoWeekMatch[1], 10);
+    const days = weeks * 7;
     return { days, isoDuration: `P${days}D` };
   }
 
@@ -196,10 +227,11 @@ export function parseShippingEstimate(estimate: unknown): { days: number; isoDur
     return { days: 1, isoDuration: "P1D" };
   }
 
-  // Next day / overnight
+  // Next day / overnight / tomorrow
   if (
     s.includes("next day") ||
     s.includes("overnight") ||
+    s.includes("tomorrow") ||
     s.includes("1 business day") ||
     s === "1 day"
   ) {
@@ -209,6 +241,22 @@ export function parseShippingEstimate(estimate: unknown): { days: number; isoDur
   // 2-day / 2 business days
   if (s.includes("2-day") || s.includes("2 business day") || s.includes("2 days")) {
     return { days: 2, isoDuration: "P2D" };
+  }
+
+  // Week ranges e.g. "1-2 weeks", "2 to 3 weeks", "1 - 2 weeks" -> take upper bound * 7
+  const weekRangeMatch = /(\d+)\s*(?:-|to)\s*(\d+)\s*(?:business\s*)?week/i.exec(s);
+  if (weekRangeMatch?.[2]) {
+    const upperWeeks = parseInt(weekRangeMatch[2], 10);
+    const days = upperWeeks * 7;
+    return { days, isoDuration: `P${days}D` };
+  }
+
+  // Single week count e.g. "1 week", "2 weeks", "3 business weeks"
+  const singleWeekMatch = /(\d+)\s*(?:business\s*)?week/i.exec(s);
+  if (singleWeekMatch?.[1]) {
+    const weeks = parseInt(singleWeekMatch[1], 10);
+    const days = weeks * 7;
+    return { days, isoDuration: `P${days}D` };
   }
 
   // Ranges e.g. "3-5 business days", "3 to 5 days", "1-3 days" -> take upper bound
