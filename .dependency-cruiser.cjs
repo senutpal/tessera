@@ -60,10 +60,12 @@ module.exports = {
     },
   ],
   options: {
-    doNotFollow: { path: "node_modules" },
+    doNotFollow: { path: ["node_modules", "(^|/)dist/"] },
+    exclude: { path: "(^|/)dist/" },
     tsConfig: { fileName: "tsconfig.json" },
     tsPreCompilationDeps: true,
     enhancedResolveOptions: {
+      conditionNames: ["types", "import", "default"],
       extensions: [".ts", ".tsx", ".js", ".jsx", ".json"],
     },
   },
