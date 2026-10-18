@@ -53,26 +53,32 @@ export type AuthorizationId = Brand<string, "AuthorizationId">;
 export type CaptureId = Brand<string, "CaptureId">;
 export type CarrierTrackingId = Brand<string, "CarrierTrackingId">;
 
+/** Casts an arbitrary string to a nominal TransactionId. */
 export function asTransactionId(id: string): TransactionId {
   return id as TransactionId;
 }
 
+/** Casts an arbitrary string to a nominal MandateId. */
 export function asMandateId(id: string): MandateId {
   return id as MandateId;
 }
 
+/** Casts an arbitrary string to a nominal OrderId. */
 export function asOrderId(id: string): OrderId {
   return id as OrderId;
 }
 
+/** Casts an arbitrary string to a nominal AuthorizationId. */
 export function asAuthorizationId(id: string): AuthorizationId {
   return id as AuthorizationId;
 }
 
+/** Casts an arbitrary string to a nominal CaptureId. */
 export function asCaptureId(id: string): CaptureId {
   return id as CaptureId;
 }
 
+/** Casts an arbitrary string to a nominal CarrierTrackingId. */
 export function asCarrierTrackingId(id: string): CarrierTrackingId {
   return id as CarrierTrackingId;
 }

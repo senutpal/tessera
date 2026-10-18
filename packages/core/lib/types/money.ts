@@ -71,18 +71,31 @@ export class Money {
     Object.freeze(this);
   }
 
+  /**
+   * Creates a Money instance from minor units (e.g. cents for USD).
+   */
   public static fromMinorUnits(amount: number, currency = "USD"): Money {
     return new Money(amount, currency);
   }
 
+  /**
+   * Alias for `fromMinorUnits`. Creates a Money instance from cents.
+   */
   public static fromCents(cents: number, currency = "USD"): Money {
     return new Money(cents, currency);
   }
 
+  /**
+   * Returns a zero-value Money instance for the given currency.
+   */
   public static zero(currency = "USD"): Money {
     return new Money(0, currency);
   }
 
+  /**
+   * Creates a Money instance from a decimal string representation (e.g. "249.99").
+   * Performs half-away-from-zero rounding if fractional digits exceed currency scale.
+   */
   public static fromDecimalString(decimalStr: string, currency = "USD"): Money {
     const validCurrency = validateCurrency(currency);
     const scale = getCurrencyScale(validCurrency);
@@ -142,6 +155,9 @@ export class Money {
     return new Money(finalAmount, validCurrency);
   }
 
+  /**
+   * Parses a PayPal amount object (`{ currency_code, value }`) into a Money instance.
+   */
   public static fromPayPal(payPalAmount: PayPalAmount): Money {
     if (!payPalAmount || typeof payPalAmount !== "object") {
       throw new MandateValidationError("Invalid PayPal amount payload");
@@ -149,6 +165,9 @@ export class Money {
     return Money.fromDecimalString(payPalAmount.value, payPalAmount.currency_code);
   }
 
+  /**
+   * Parses an AP2 amount object (`{ currency, amount }`) into a Money instance.
+   */
   public static fromAP2(ap2Amount: AP2Amount): Money {
     if (!ap2Amount || typeof ap2Amount !== "object") {
       throw new MandateValidationError("Invalid AP2 amount payload");
@@ -156,10 +175,16 @@ export class Money {
     return Money.fromMinorUnits(ap2Amount.amount, ap2Amount.currency);
   }
 
+  /**
+   * Returns the integer amount in minor currency units (e.g. cents).
+   */
   public toMinorUnits(): number {
     return this.amount;
   }
 
+  /**
+   * Formats the monetary amount as a decimal string with appropriate currency precision.
+   */
   public toDecimalString(): string {
     const isNegative = this.amount < 0;
     const abs = Math.abs(this.amount);
@@ -175,6 +200,9 @@ export class Money {
     return `${isNegative ? "-" : ""}${intPart}.${fracPart}`;
   }
 
+  /**
+   * Converts this Money instance into a PayPal API compatible amount object.
+   */
   public toPayPalAmount(): PayPalAmount {
     return {
       currency_code: this.currency,
@@ -182,6 +210,9 @@ export class Money {
     };
   }
 
+  /**
+   * Converts this Money instance into an AP2 protocol compliant amount object.
+   */
   public toAP2Amount(): AP2Amount {
     return {
       amount: this.amount,
@@ -189,24 +220,37 @@ export class Money {
     };
   }
 
+  /**
+   * Adds another Money amount. Currencies must match.
+   */
   public add(other: Money): Money {
     this.assertSameCurrency(other);
     return new Money(this.amount + other.amount, this.currency);
   }
 
+  /**
+   * Subtracts another Money amount. Currencies must match.
+   */
   public subtract(other: Money): Money {
     this.assertSameCurrency(other);
     return new Money(this.amount - other.amount, this.currency);
   }
 
+  /**
+   * Multiplies the amount by a factor, using symmetric half-away-from-zero rounding.
+   */
   public multiply(factor: number): Money {
     if (typeof factor !== "number" || !Number.isFinite(factor)) {
       throw new MandateValidationError(`Invalid multiplication factor: ${factor}`);
     }
-    const scaled = Math.round(this.amount * factor);
+    const product = this.amount * factor;
+    const scaled = Math.sign(product) * Math.round(Math.abs(product));
     return new Money(scaled, this.currency);
   }
 
+  /**
+   * Allocates the monetary amount across a series of ratios without losing pennies (Hare-Niemeyer method).
+   */
   public allocate(ratios: number[]): Money[] {
     if (!Array.isArray(ratios) || ratios.length === 0) {
       throw new MandateValidationError("Ratios array cannot be empty for allocation");

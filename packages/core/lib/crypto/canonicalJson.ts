@@ -38,7 +38,17 @@ function serializeValue(value: unknown, seen: Set<object>): string {
   if (typeof value === "object") {
     const candidate = value as { toJSON?: () => unknown };
     if (typeof candidate.toJSON === "function") {
-      return serializeValue(candidate.toJSON(), seen);
+      if (seen.has(value)) {
+        throw new CanonicalJsonError(
+          "Circular reference detected during RFC 8785 canonicalization",
+        );
+      }
+      seen.add(value);
+      try {
+        return serializeValue(candidate.toJSON(), seen);
+      } finally {
+        seen.delete(value);
+      }
     }
 
     if (seen.has(value)) {
@@ -55,6 +65,13 @@ function serializeValue(value: unknown, seen: Set<object>): string {
           return serializeValue(elem, seen);
         });
         return `[${elements.join(",")}]`;
+      }
+
+      const proto = Object.getPrototypeOf(value);
+      if (proto !== Object.prototype && proto !== null) {
+        throw new CanonicalJsonError(
+          `Unsupported object type cannot be canonicalized: ${proto?.constructor?.name ?? "unknown"}`,
+        );
       }
 
       // RFC 8785 Section 3.2.3: Sorting of Object Properties
@@ -86,6 +103,14 @@ function serializeValue(value: unknown, seen: Set<object>): string {
   throw new CanonicalJsonError(`Unsupported value type cannot be canonicalized: ${typeof value}`);
 }
 
+/**
+ * Serializes arbitrary JavaScript data structures into deterministic,
+ * canonical JSON according to RFC 8785 (JSON Canonicalization Scheme / JCS).
+ *
+ * @param data - The value to serialize.
+ * @returns Deterministically sorted UTF-8 string representation.
+ * @throws {CanonicalJsonError} If non-finite numbers, lone surrogates, or circular references are encountered.
+ */
 export function canonicalize(data: unknown): string {
   if (data === undefined || typeof data === "function" || typeof data === "symbol") {
     throw new CanonicalJsonError("Top-level undefined, function, or symbol cannot be serialized");
@@ -93,6 +118,13 @@ export function canonicalize(data: unknown): string {
   return serializeValue(data, new Set<object>());
 }
 
+/**
+ * Serializes arbitrary JavaScript data structures into deterministic RFC 8785
+ * canonical JSON, returning a raw UTF-8 Buffer for cryptographic signing and hashing.
+ *
+ * @param data - The value to serialize.
+ * @returns Buffer containing the UTF-8 encoded canonical JSON bytes.
+ */
 export function canonicalizeToBuffer(data: unknown): Buffer {
   return Buffer.from(canonicalize(data), "utf8");
 }

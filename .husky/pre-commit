@@ -1,4 +1,4 @@
-export PATH="${PATH//\"/}"
+PATH=$(printf '%s' "$PATH" | tr -d '"'); export PATH
 npx lint-staged
 pnpm run lint:boundaries
 pnpm run typecheck

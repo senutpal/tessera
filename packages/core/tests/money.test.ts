@@ -108,6 +108,13 @@ describe("Money Value Object", () => {
         currency: "USD",
         amount: 24999,
       });
+
+      expect(money.toJSON()).toEqual({
+        amount: 24999,
+        currency: "USD",
+        formatted: "249.99",
+      });
+      expect(JSON.stringify(money)).toBe('{"amount":24999,"currency":"USD","formatted":"249.99"}');
     });
   });
 
@@ -139,6 +146,12 @@ describe("Money Value Object", () => {
       const taxed = m.multiply(1.0825);
       expect(taxed.toDecimalString()).toBe("10.83");
       expect(taxed.amount).toBe(1083);
+
+      const neg = Money.fromDecimalString("-10.00", "USD");
+      const negTaxed = neg.multiply(1.0825);
+      expect(negTaxed.toDecimalString()).toBe("-10.83");
+      expect(negTaxed.amount).toBe(-1083);
+      expect(taxed.add(negTaxed).isZero()).toBe(true);
     });
 
     it("allocates amounts across ratios without penny-loss", () => {
