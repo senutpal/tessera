@@ -40,7 +40,7 @@ export {
   MerchantSpoofingError,
   type PolicyConfig,
   type PolicyEvaluationResult,
-  PolicyRuleViolationCode,
+  type PolicyRuleViolationCode,
   PolicyRuleViolationError,
   type PolicyViolationDetail,
   QueueItemExpiredError,
