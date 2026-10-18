@@ -187,14 +187,39 @@ describe("RFC 8785 Deterministic Canonical JSON Engine", () => {
     });
 
     it("accepts valid surrogate pairs", () => {
-      const emoji = { symbol: "🤖" };
-      expect(canonicalize(emoji)).toBe('{"symbol":"🤖"}');
+      const emoji = { symbol: "🎉" };
+      expect(canonicalize(emoji)).toBe('{"symbol":"🎉"}');
     });
 
     it("rejects top-level undefined, function, or symbol", () => {
       expect(() => canonicalize(undefined)).toThrow(CanonicalJsonError);
       expect(() => canonicalize(() => {})).toThrow(CanonicalJsonError);
       expect(() => canonicalize(Symbol("test"))).toThrow(CanonicalJsonError);
+    });
+
+    it("rejects non-plain objects without toJSON (e.g. Map, Set)", () => {
+      expect(() => canonicalize(new Map())).toThrow(CanonicalJsonError);
+      expect(() => canonicalize(new Set([1, 2]))).toThrow(CanonicalJsonError);
+      class CustomClass {
+        constructor(public val = 1) {}
+      }
+      expect(() => canonicalize(new CustomClass())).toThrow(CanonicalJsonError);
+    });
+
+    it("serializes null-prototype objects correctly", () => {
+      const nullProto = Object.create(null);
+      nullProto.b = 2;
+      nullProto.a = 1;
+      expect(canonicalize(nullProto)).toBe('{"a":1,"b":2}');
+    });
+
+    it("detects circular reference via self-returning toJSON", () => {
+      const selfRefToJSON = {
+        toJSON() {
+          return this;
+        },
+      };
+      expect(() => canonicalize(selfRefToJSON)).toThrow(CanonicalJsonError);
     });
   });
 });

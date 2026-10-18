@@ -7,7 +7,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "lint:boundaries": "depcruise packages",
+    "lint:boundaries": "node -e \"const fs=require('fs'),cp=require('child_process');cp.execSync('depcruise packages' + (fs.existsSync('apps') ? ' apps' : ''), {stdio:'inherit'})\"",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
