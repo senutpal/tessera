@@ -1,4 +1,4 @@
-import { parsePrivateKey, signPayloadEd25519, verifyPayloadEd25519 } from "../crypto/ed25519.js";
+import { signPayloadEd25519, verifyPayloadEd25519 } from "../crypto/ed25519.js";
 import {
   DuplicateMandateNonceError,
   ExpiredMandateError,
@@ -6,12 +6,15 @@ import {
   MandateBindingMismatchError,
   MandateSchemaValidationError,
 } from "../errors.js";
-import { type CheckoutMandate, CheckoutMandateSchema } from "../schemas/checkoutMandate.js";
+import {
+  type CheckoutMandate,
+  CheckoutMandateSchema,
+  computeCheckoutHash,
+} from "../schemas/checkoutMandate.js";
 import { type PaymentMandate, PaymentMandateSchema } from "../schemas/paymentMandate.js";
 import type { NonceStore } from "../store/nonceStore.js";
 
 const DEFAULT_CLOCK_SKEW_TOLERANCE_SECONDS = 60;
-const DEFAULT_NONCE_TTL_SECONDS = 3600;
 
 export interface SignedMandate<T = unknown> {
   mandate: T;
@@ -34,8 +37,9 @@ export function signMandate<T extends object>(
   privateKey: string | Buffer,
   signerPublicKey?: string,
 ): SignedMandate<T> {
-  // Validate private key exists and is valid
-  parsePrivateKey(privateKey);
+  if (!mandate || typeof mandate !== "object") {
+    throw new MandateSchemaValidationError("Mandate must be a non-null object");
+  }
   const signature = signPayloadEd25519(mandate, privateKey);
   return {
     mandate,
@@ -45,7 +49,7 @@ export function signMandate<T extends object>(
 }
 
 /**
- * Internal helper to validate temporal validity (expiration and clock skew).
+ * Internal helper to validate temporal validity (expiration, sequence, and clock skew).
  */
 function validateTimestamps(
   iat: number | undefined,
@@ -61,7 +65,15 @@ function validateTimestamps(
     });
   }
 
-  // 2. Check premature issue time (beyond skew tolerance)
+  // 2. Reject inverted timestamps where exp <= iat
+  if (exp !== undefined && iat !== undefined && exp <= iat) {
+    throw new MandateSchemaValidationError(
+      `Mandate exp (${exp}) must be strictly greater than iat (${iat})`,
+      { exp, iat },
+    );
+  }
+
+  // 3. Check premature issue time (beyond skew tolerance)
   if (iat !== undefined && iat > nowEpoch + toleranceSeconds) {
     throw new MandateSchemaValidationError(
       `Mandate iat ${iat} is in the future beyond skew tolerance (${nowEpoch} + ${toleranceSeconds}s)`,
@@ -72,6 +84,8 @@ function validateTimestamps(
 
 /**
  * Internal helper to evaluate anti-replay nonce protection.
+ * Requires both nonce and exp when a nonceStore is provided, ensuring nonce retention
+ * lasts through the entire mandate validity window (exp - nowEpoch).
  */
 async function consumeAntiReplayNonce(
   nonce: string | undefined,
@@ -79,13 +93,31 @@ async function consumeAntiReplayNonce(
   nowEpoch: number,
   nonceStore?: NonceStore,
 ): Promise<void> {
-  if (!nonceStore || !nonce) {
+  if (!nonceStore) {
     return;
   }
 
-  const ttl = exp !== undefined ? exp - nowEpoch : DEFAULT_NONCE_TTL_SECONDS;
-  const ok = await nonceStore.consumeNonce(nonce, Math.max(1, ttl));
+  if (!nonce || typeof nonce !== "string" || nonce.trim().length === 0) {
+    throw new MandateSchemaValidationError(
+      "Mandate nonce is required when replay protection is enabled",
+    );
+  }
 
+  if (exp === undefined) {
+    throw new MandateSchemaValidationError(
+      "Mandate exp is required when replay protection is enabled",
+    );
+  }
+
+  const ttl = exp - nowEpoch;
+  if (ttl <= 0) {
+    throw new ExpiredMandateError(`Mandate expired at epoch ${exp}, current epoch is ${nowEpoch}`, {
+      exp,
+      nowEpoch,
+    });
+  }
+
+  const ok = await nonceStore.consumeNonce(nonce, ttl);
   if (!ok) {
     throw new DuplicateMandateNonceError(
       `Mandate nonce "${nonce}" has already been consumed (replay attempt detected)`,
@@ -104,26 +136,41 @@ export async function verifyCheckoutMandate(
   if (!signed || typeof signed !== "object") {
     throw new MandateSchemaValidationError("Signed mandate container must be an object");
   }
+  if (!options || typeof options !== "object" || !options.publicKey) {
+    throw new InvalidMandateSignatureError("Public key is required for mandate verification");
+  }
 
   // 1. Parse and validate schema
   const mandate = CheckoutMandateSchema.parse(signed.mandate);
 
+  // 2. Verify hash binding between checkout_jwt and checkout_hash
+  const computedHash = computeCheckoutHash(mandate.checkout_jwt);
+  if (mandate.checkout_hash !== computedHash) {
+    throw new MandateBindingMismatchError(
+      `Checkout Mandate checkout_hash mismatch: expected "${computedHash}", received "${mandate.checkout_hash}"`,
+      {
+        expectedHash: computedHash,
+        receivedHash: mandate.checkout_hash,
+      },
+    );
+  }
+
   const nowEpoch = options.nowEpochSeconds ?? Math.floor(Date.now() / 1000);
   const tolerance = options.clockSkewToleranceSeconds ?? DEFAULT_CLOCK_SKEW_TOLERANCE_SECONDS;
 
-  // 2. Validate timestamps
+  // 3. Validate timestamps
   validateTimestamps(mandate.iat, mandate.exp, nowEpoch, tolerance);
 
-  // 3. Anti-replay verification
-  await consumeAntiReplayNonce(mandate.nonce, mandate.exp, nowEpoch, options.nonceStore);
-
-  // 4. Verify Ed25519 signature
-  const isValid = verifyPayloadEd25519(mandate, signed.signature, options.publicKey);
+  // 4. Verify Ed25519 signature over original signed.mandate before consuming nonce
+  const isValid = verifyPayloadEd25519(signed.mandate, signed.signature, options.publicKey);
   if (!isValid) {
     throw new InvalidMandateSignatureError(
       "Ed25519 signature verification failed for Checkout Mandate",
     );
   }
+
+  // 5. Anti-replay verification only after signature is authenticated
+  await consumeAntiReplayNonce(mandate.nonce, mandate.exp, nowEpoch, options.nonceStore);
 
   return mandate;
 }
@@ -138,6 +185,9 @@ export async function verifyPaymentMandate(
   if (!signed || typeof signed !== "object") {
     throw new MandateSchemaValidationError("Signed mandate container must be an object");
   }
+  if (!options || typeof options !== "object" || !options.publicKey) {
+    throw new InvalidMandateSignatureError("Public key is required for mandate verification");
+  }
 
   // 1. Parse and validate schema
   const mandate = PaymentMandateSchema.parse(signed.mandate);
@@ -148,16 +198,16 @@ export async function verifyPaymentMandate(
   // 2. Validate timestamps
   validateTimestamps(mandate.iat, mandate.exp, nowEpoch, tolerance);
 
-  // 3. Anti-replay verification
-  await consumeAntiReplayNonce(mandate.nonce, mandate.exp, nowEpoch, options.nonceStore);
-
-  // 4. Verify Ed25519 signature
-  const isValid = verifyPayloadEd25519(mandate, signed.signature, options.publicKey);
+  // 3. Verify Ed25519 signature over original signed.mandate before consuming nonce
+  const isValid = verifyPayloadEd25519(signed.mandate, signed.signature, options.publicKey);
   if (!isValid) {
     throw new InvalidMandateSignatureError(
       "Ed25519 signature verification failed for Payment Mandate",
     );
   }
+
+  // 4. Anti-replay verification only after signature is authenticated
+  await consumeAntiReplayNonce(mandate.nonce, mandate.exp, nowEpoch, options.nonceStore);
 
   return mandate;
 }
@@ -188,7 +238,8 @@ export async function verifyMandate(
 
 /**
  * Cryptographically verifies SD-JWT hash binding between a Checkout Mandate and a Payment Mandate.
- * Asserts that paymentMandate.transaction_id matches checkoutMandate.checkout_hash.
+ * Asserts that checkout_hash matches computed hash of checkout_jwt, and that paymentMandate.transaction_id
+ * matches checkoutMandate.checkout_hash.
  */
 export function verifyMandateBinding(
   checkoutMandate: CheckoutMandate,
@@ -200,12 +251,28 @@ export function verifyMandateBinding(
     );
   }
 
-  if (checkoutMandate.checkout_hash !== paymentMandate.transaction_id) {
+  const checkout = CheckoutMandateSchema.parse(checkoutMandate);
+  const payment = PaymentMandateSchema.parse(paymentMandate);
+
+  // 1. Recompute and verify checkout_hash from checkout_jwt
+  const computedCheckoutHash = computeCheckoutHash(checkout.checkout_jwt);
+  if (checkout.checkout_hash !== computedCheckoutHash) {
     throw new MandateBindingMismatchError(
-      `Mandate hash binding mismatch: payment mandate transaction_id "${paymentMandate.transaction_id}" does not match checkout_hash "${checkoutMandate.checkout_hash}"`,
+      `Checkout Mandate checkout_hash mismatch: expected "${computedCheckoutHash}", received "${checkout.checkout_hash}"`,
       {
-        checkoutHash: checkoutMandate.checkout_hash,
-        paymentTransactionId: paymentMandate.transaction_id,
+        expectedHash: computedCheckoutHash,
+        receivedHash: checkout.checkout_hash,
+      },
+    );
+  }
+
+  // 2. Verify binding between checkout_hash and payment transaction_id
+  if (checkout.checkout_hash !== payment.transaction_id) {
+    throw new MandateBindingMismatchError(
+      `Mandate hash binding mismatch: payment mandate transaction_id "${payment.transaction_id}" does not match checkout_hash "${checkout.checkout_hash}"`,
+      {
+        checkoutHash: checkout.checkout_hash,
+        paymentTransactionId: payment.transaction_id,
       },
     );
   }

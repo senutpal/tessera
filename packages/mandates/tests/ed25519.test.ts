@@ -1,7 +1,11 @@
+import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  computeCanonicalMandateHash,
   generateEd25519KeyPair,
   InvalidMandateSignatureError,
+  parsePrivateKey,
+  parsePublicKey,
   signPayloadEd25519,
   verifyPayloadEd25519,
 } from "../index.js";
@@ -121,5 +125,54 @@ describe("Ed25519 Cryptographic Signer & Verifier", () => {
     expect(() => verifyPayloadEd25519(payload, validSig, "short-key")).toThrow(
       InvalidMandateSignatureError,
     );
+  });
+
+  it("verifies known RFC 8032 test vectors", () => {
+    // RFC 8032 Section 7.1 Test Vector 1
+    const privHex = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+    const pubHex = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+    const privBase64Url = Buffer.from(privHex, "hex").toString("base64url");
+    const pubBase64Url = Buffer.from(pubHex, "hex").toString("base64url");
+
+    const payload = { test: "rfc8032" };
+    const sig = signPayloadEd25519(payload, privBase64Url);
+    expect(verifyPayloadEd25519(payload, sig, pubBase64Url)).toBe(true);
+  });
+
+  it("rejects non-Ed25519 KeyObjects (e.g. RSA or EC) with InvalidMandateSignatureError", () => {
+    const { publicKey: rsaPub, privateKey: rsaPriv } = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+    });
+
+    expect(() => parsePublicKey(rsaPub)).toThrow(InvalidMandateSignatureError);
+    expect(() => parsePrivateKey(rsaPriv)).toThrow(InvalidMandateSignatureError);
+  });
+
+  it("rejects null or non-string/non-buffer key inputs with InvalidMandateSignatureError", () => {
+    expect(() => parsePublicKey(null as unknown as string)).toThrow(InvalidMandateSignatureError);
+    expect(() => parsePublicKey(123 as unknown as string)).toThrow(InvalidMandateSignatureError);
+    expect(() => parsePrivateKey(null as unknown as string)).toThrow(InvalidMandateSignatureError);
+    expect(() => parsePrivateKey(false as unknown as string)).toThrow(InvalidMandateSignatureError);
+  });
+
+  it("supports PEM-encoded Ed25519 keys", () => {
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const pubPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+    const privPem = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+
+    const payload = { pemTest: true };
+    const sig = signPayloadEd25519(payload, privPem);
+    expect(verifyPayloadEd25519(payload, sig, pubPem)).toBe(true);
+  });
+
+  it("computes deterministic canonical mandate hash", () => {
+    const mandate1 = { b: 2, a: 1 };
+    const mandate2 = { a: 1, b: 2 };
+    const hash1 = computeCanonicalMandateHash(mandate1);
+    const hash2 = computeCanonicalMandateHash(mandate2);
+
+    expect(hash1).toBe(hash2);
+    expect(typeof hash1).toBe("string");
+    expect(hash1.length).toBeGreaterThan(20);
   });
 });

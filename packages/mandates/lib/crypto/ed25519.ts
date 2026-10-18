@@ -1,4 +1,5 @@
 import {
+  createHash,
   createPrivateKey,
   createPublicKey,
   generateKeyPairSync,
@@ -44,19 +45,52 @@ export function generateEd25519KeyPair(): Ed25519KeyPair {
 }
 
 /**
- * Converts a raw 32-byte Ed25519 public key (base64url, Buffer, or KeyObject)
- * into a Node.js crypto KeyObject.
+ * Converts an Ed25519 public key (base64url, PEM string, Buffer, or KeyObject)
+ * into a Node.js crypto KeyObject. Rejects non-Ed25519 keys.
  */
 export function parsePublicKey(publicKeyInput: string | Buffer | KeyObject): KeyObject {
+  if (!publicKeyInput) {
+    throw new InvalidMandateSignatureError("Ed25519 public key is required");
+  }
+
   if (publicKeyInput instanceof KeyObject) {
     if (publicKeyInput.type !== "public") {
       throw new InvalidMandateSignatureError("KeyObject must be a public key");
     }
+    if (publicKeyInput.asymmetricKeyType !== "ed25519") {
+      throw new InvalidMandateSignatureError(
+        `KeyObject must be an Ed25519 key, received "${publicKeyInput.asymmetricKeyType}"`,
+      );
+    }
     return publicKeyInput;
   }
 
-  const rawBytes: Buffer =
-    typeof publicKeyInput === "string" ? Buffer.from(publicKeyInput, "base64url") : publicKeyInput;
+  let rawBytes: Buffer;
+  if (typeof publicKeyInput === "string") {
+    if (publicKeyInput.includes("-----BEGIN")) {
+      try {
+        const keyObj = createPublicKey(publicKeyInput);
+        if (keyObj.asymmetricKeyType !== "ed25519") {
+          throw new InvalidMandateSignatureError(
+            `PEM key must be an Ed25519 key, received "${keyObj.asymmetricKeyType}"`,
+          );
+        }
+        return keyObj;
+      } catch (err) {
+        if (err instanceof InvalidMandateSignatureError) throw err;
+        throw new InvalidMandateSignatureError(
+          `Failed to parse Ed25519 PEM public key: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    rawBytes = Buffer.from(publicKeyInput, "base64url");
+  } else if (Buffer.isBuffer(publicKeyInput)) {
+    rawBytes = publicKeyInput;
+  } else {
+    throw new InvalidMandateSignatureError(
+      "Ed25519 public key must be a base64url string, PEM string, Buffer, or KeyObject",
+    );
+  }
 
   if (rawBytes.length !== ED25519_RAW_PUBLIC_KEY_LENGTH) {
     throw new InvalidMandateSignatureError(
@@ -75,21 +109,52 @@ export function parsePublicKey(publicKeyInput: string | Buffer | KeyObject): Key
 }
 
 /**
- * Converts a raw 32-byte Ed25519 private key seed (base64url, Buffer, or KeyObject)
- * into a Node.js crypto KeyObject.
+ * Converts an Ed25519 private key seed (base64url, PEM string, Buffer, or KeyObject)
+ * into a Node.js crypto KeyObject. Rejects non-Ed25519 keys.
  */
 export function parsePrivateKey(privateKeyInput: string | Buffer | KeyObject): KeyObject {
+  if (!privateKeyInput) {
+    throw new InvalidMandateSignatureError("Ed25519 private key is required");
+  }
+
   if (privateKeyInput instanceof KeyObject) {
     if (privateKeyInput.type !== "private") {
       throw new InvalidMandateSignatureError("KeyObject must be a private key");
     }
+    if (privateKeyInput.asymmetricKeyType !== "ed25519") {
+      throw new InvalidMandateSignatureError(
+        `KeyObject must be an Ed25519 key, received "${privateKeyInput.asymmetricKeyType}"`,
+      );
+    }
     return privateKeyInput;
   }
 
-  const rawBytes: Buffer =
-    typeof privateKeyInput === "string"
-      ? Buffer.from(privateKeyInput, "base64url")
-      : privateKeyInput;
+  let rawBytes: Buffer;
+  if (typeof privateKeyInput === "string") {
+    if (privateKeyInput.includes("-----BEGIN")) {
+      try {
+        const keyObj = createPrivateKey(privateKeyInput);
+        if (keyObj.asymmetricKeyType !== "ed25519") {
+          throw new InvalidMandateSignatureError(
+            `PEM key must be an Ed25519 key, received "${keyObj.asymmetricKeyType}"`,
+          );
+        }
+        return keyObj;
+      } catch (err) {
+        if (err instanceof InvalidMandateSignatureError) throw err;
+        throw new InvalidMandateSignatureError(
+          `Failed to parse Ed25519 PEM private key: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    rawBytes = Buffer.from(privateKeyInput, "base64url");
+  } else if (Buffer.isBuffer(privateKeyInput)) {
+    rawBytes = privateKeyInput;
+  } else {
+    throw new InvalidMandateSignatureError(
+      "Ed25519 private key seed must be a base64url string, PEM string, Buffer, or KeyObject",
+    );
+  }
 
   if (rawBytes.length !== ED25519_RAW_PRIVATE_SEED_LENGTH) {
     throw new InvalidMandateSignatureError(
@@ -152,4 +217,12 @@ export function verifyPayloadEd25519(
   } catch {
     return false;
   }
+}
+
+/**
+ * Computes base64url SHA-256 hash of an arbitrary payload over RFC 8785 canonical JSON bytes.
+ */
+export function computeCanonicalMandateHash(mandate: unknown): string {
+  const canonicalBytes = canonicalizeToBuffer(mandate);
+  return createHash("sha256").update(canonicalBytes).digest("base64url");
 }
