@@ -69,7 +69,7 @@ export class VelocityTracker {
     if (!ledger) {
       // Evict least-recently-active ledger if capacity reached
       if (this.ledgers.size >= this.maxAgents) {
-        this.evictOldestLedger();
+        this.evictOldestLedger(timestamp);
       }
       ledger = {
         recentEntries: [],
@@ -82,20 +82,27 @@ export class VelocityTracker {
     return ledger;
   }
 
-  private evictOldestLedger(): void {
+  private evictOldestLedger(now: number): void {
+    const retentionCutoff = now - this.maxRetentionMs;
     let oldestKey: string | undefined;
     let oldestTimestamp = Number.POSITIVE_INFINITY;
 
     for (const [key, ledger] of this.ledgers) {
-      if (ledger.lastActive < oldestTimestamp) {
+      const isExpired = ledger.lastActive < retentionCutoff;
+      const isEmpty = ledger.buckets.size === 0 && ledger.recentEntries.length === 0;
+      if ((isExpired || isEmpty) && ledger.lastActive < oldestTimestamp) {
         oldestTimestamp = ledger.lastActive;
         oldestKey = key;
       }
     }
 
-    if (oldestKey) {
-      this.ledgers.delete(oldestKey);
+    if (!oldestKey) {
+      throw new Error(
+        "VelocityTracker capacity reached: refusing to evict active ledgers with in-window spend",
+      );
     }
+
+    this.ledgers.delete(oldestKey);
   }
 
   /**
