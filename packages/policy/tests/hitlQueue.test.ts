@@ -182,13 +182,16 @@ describe("HITL Escalation Queue & Supervisor Counter-Signatures", () => {
     const signature = signSupervisorApproval(payload, unauthorizedKeys.privateKey);
 
     expect(() =>
-      queue.submitSupervisorApproval({
-        queueId: item.id,
-        supervisorPublicKey: unauthorizedKeys.publicKey,
-        signature,
-        decision: "APPROVE",
-        timestamp: now + 1000,
-      }),
+      queue.submitSupervisorApproval(
+        {
+          queueId: item.id,
+          supervisorPublicKey: unauthorizedKeys.publicKey,
+          signature,
+          decision: "APPROVE",
+          timestamp: now + 1000,
+        },
+        now + 1000,
+      ),
     ).toThrow(UnauthorizedSupervisorError);
   });
 
@@ -212,13 +215,16 @@ describe("HITL Escalation Queue & Supervisor Counter-Signatures", () => {
     const forgedSignature = signSupervisorApproval(payload, unauthorizedKeys.privateKey);
 
     expect(() =>
-      queue.submitSupervisorApproval({
-        queueId: item.id,
-        supervisorPublicKey: supervisorKeys.publicKey, // claiming authorized key
-        signature: forgedSignature, // but signed with different key
-        decision: "APPROVE",
-        timestamp: now + 1000,
-      }),
+      queue.submitSupervisorApproval(
+        {
+          queueId: item.id,
+          supervisorPublicKey: supervisorKeys.publicKey, // claiming authorized key
+          signature: forgedSignature, // but signed with different key
+          decision: "APPROVE",
+          timestamp: now + 1000,
+        },
+        now + 1000,
+      ),
     ).toThrow(InvalidSupervisorSignatureError);
   });
 
@@ -523,5 +529,36 @@ describe("HITL Escalation Queue & Supervisor Counter-Signatures", () => {
     );
 
     expect(resolved.status).toBe(HITLQueueStatus.APPROVED_BY_SUPERVISOR);
+  });
+
+  it("uses real clock time Date.now() when now parameter is omitted", () => {
+    const queue = new HITLQueue(config);
+    const mandate = createSampleMandate("tx-clock-test-001");
+    // Enqueued 2 days in the past (already expired relative to Date.now())
+    const pastTime = Date.now() - 48 * 60 * 60 * 1000;
+
+    const item = queue.enqueue({
+      agentId: "agent-clock",
+      mandate,
+      transactionAmount: Money.fromCents(30000, "USD"),
+      riskScore: 80,
+      riskTier: RiskTier.CRITICAL_HITL,
+      rationale: ["Clock test"],
+      createdAt: pastTime,
+    });
+
+    const payload = createSupervisorApprovalPayload(item.id, mandate, "APPROVE", pastTime + 1000);
+    const signature = signSupervisorApproval(payload, supervisorKeys.privateKey);
+
+    // Submitting with omitted `now` compares against Date.now(), detecting expiration even if submission timestamp was forged in past
+    expect(() =>
+      queue.submitSupervisorApproval({
+        queueId: item.id,
+        supervisorPublicKey: supervisorKeys.publicKey,
+        signature,
+        decision: "APPROVE",
+        timestamp: pastTime + 1000,
+      }),
+    ).toThrow(QueueItemExpiredError);
   });
 });

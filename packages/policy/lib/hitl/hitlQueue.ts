@@ -186,7 +186,7 @@ export class HITLQueue {
    */
   public submitSupervisorApproval(
     submission: SupervisorApprovalSubmission,
-    now?: number,
+    now = Date.now(),
   ): HITLQueueItem {
     if (!submission || typeof submission !== "object") {
       throw new InvalidQueueStateError("Supervisor approval submission is required");
@@ -205,7 +205,7 @@ export class HITLQueue {
       });
     }
 
-    const effectiveNow = now ?? submission.timestamp;
+    const effectiveNow = now;
     const item = this.getItem(submission.queueId, effectiveNow);
     if (!item) {
       throw new InvalidQueueStateError(`HITL queue item not found: ${submission.queueId}`, {
