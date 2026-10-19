@@ -1,0 +1,375 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  CertificateManager,
+  type ClearinghouseAuthorizationCreatedEvent,
+  type ClearinghouseAuthorizationVoidedEvent,
+  type ClearinghouseWebhookEvent,
+  routeWebhook,
+  type WebhookEventSink,
+  WebhookRouter,
+  WebhookSignatureVerifier,
+} from "../index.js";
+import { createSignedWebhookRequest, TEST_CERT_PEM, TEST_WEBHOOK_ID } from "./testCryptoHelpers.js";
+
+describe("WebhookRouter", () => {
+  const createMockVerifier = () => {
+    const mockFetch = vi
+      .fn()
+      .mockImplementation(() => new Response(TEST_CERT_PEM, { status: 200 }));
+    const certManager = new CertificateManager({
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+    return new WebhookSignatureVerifier({
+      certificateManager: certManager,
+      defaultWebhookId: TEST_WEBHOOK_ID,
+    });
+  };
+
+  describe("Routing PAYMENT.AUTHORIZATION.CREATED", () => {
+    it("transforms resource and dispatches to event sink and handlers", async () => {
+      const verifier = createMockVerifier();
+      const emittedEvents: ClearinghouseWebhookEvent[] = [];
+      const mockEventSink: WebhookEventSink = {
+        emit: vi.fn().mockImplementation((event) => {
+          emittedEvents.push(event);
+        }),
+      };
+
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+        eventSink: mockEventSink,
+      });
+
+      const specificHandler = vi.fn();
+      const wildcardHandler = vi.fn();
+      router.on("PAYMENT.AUTHORIZATION.CREATED", specificHandler);
+      router.on("*", wildcardHandler);
+
+      const payload = {
+        id: "WH-EVT-001",
+        create_time: "2026-10-19T10:00:00Z",
+        resource_type: "authorization",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        summary: "A payment authorization was created",
+        resource: {
+          id: "2DC87612EK520411B",
+          status: "CREATED",
+          amount: {
+            currency_code: "USD",
+            value: "249.99",
+          },
+          parent_payment: "PAY-36246664YD343335CKHFA4AY",
+          expiration_time: "2026-11-19T10:00:00Z",
+        },
+      };
+
+      const req = createSignedWebhookRequest({
+        rawBody: JSON.stringify(payload),
+      });
+
+      const result = await router.handleWebhook(req);
+
+      expect(result.status).toBe("PROCESSED");
+      expect(result.httpStatus).toBe(200);
+      expect(result.eventType).toBe("PAYMENT.AUTHORIZATION.CREATED");
+      expect(result.domainEvent).toBeDefined();
+
+      const domainEvent = result.domainEvent as ClearinghouseAuthorizationCreatedEvent;
+      expect(domainEvent.type).toBe("PAYMENT.AUTHORIZATION.CREATED");
+      expect(domainEvent.authorizationId).toBe("2DC87612EK520411B");
+      expect(domainEvent.amount.amount).toBe(24999);
+      expect(domainEvent.amount.currency).toBe("USD");
+      expect(domainEvent.status).toBe("CREATED");
+      expect(domainEvent.parentPayment).toBe("PAY-36246664YD343335CKHFA4AY");
+      expect(domainEvent.transmissionId).toBe(req.headers["paypal-transmission-id"]);
+
+      expect(mockEventSink.emit).toHaveBeenCalledTimes(1);
+      expect(specificHandler).toHaveBeenCalledWith(domainEvent);
+      expect(wildcardHandler).toHaveBeenCalledWith(domainEvent);
+    });
+
+    it("extracts orderId from supplementary_data if present", async () => {
+      const verifier = createMockVerifier();
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      const payload = {
+        id: "WH-EVT-002",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: {
+          id: "AUTH-SUPP-1",
+          status: "CREATED",
+          amount: { currency: "USD", total: "10.00" },
+          supplementary_data: {
+            related_ids: {
+              order_id: "ORD-999-XYZ",
+            },
+          },
+        },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+      const result = await router.handleWebhook(req);
+
+      expect(result.status).toBe("PROCESSED");
+      const event = result.domainEvent as ClearinghouseAuthorizationCreatedEvent;
+      expect(event.orderId).toBe("ORD-999-XYZ");
+      expect(event.amount.amount).toBe(1000);
+    });
+  });
+
+  describe("Routing PAYMENT.AUTHORIZATION.VOIDED", () => {
+    it("transforms resource and dispatches voided domain event", async () => {
+      const verifier = createMockVerifier();
+      const emittedEvents: ClearinghouseWebhookEvent[] = [];
+      const mockEventSink: WebhookEventSink = {
+        emit: vi.fn().mockImplementation((event) => {
+          emittedEvents.push(event);
+        }),
+      };
+
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+        eventSink: mockEventSink,
+      });
+
+      const payload = {
+        id: "WH-EVT-003",
+        event_type: "PAYMENT.AUTHORIZATION.VOIDED",
+        resource: {
+          id: "AUTH-VOID-99",
+          status: "VOIDED",
+          status_details: {
+            reason: "SLA_BREACH_VOIDED",
+          },
+          amount: {
+            currency_code: "USD",
+            value: "75.50",
+          },
+          update_time: "2026-10-19T10:05:00Z",
+        },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+      const result = await router.handleWebhook(req);
+
+      expect(result.status).toBe("PROCESSED");
+      expect(result.httpStatus).toBe(200);
+      expect(result.eventType).toBe("PAYMENT.AUTHORIZATION.VOIDED");
+
+      const domainEvent = result.domainEvent as ClearinghouseAuthorizationVoidedEvent;
+      expect(domainEvent.type).toBe("PAYMENT.AUTHORIZATION.VOIDED");
+      expect(domainEvent.authorizationId).toBe("AUTH-VOID-99");
+      expect(domainEvent.reason).toBe("SLA_BREACH_VOIDED");
+      expect(domainEvent.amount?.amount).toBe(7550);
+      expect(domainEvent.status).toBe("VOIDED");
+
+      expect(mockEventSink.emit).toHaveBeenCalledWith(domainEvent);
+    });
+  });
+
+  describe("Unhandled & Ignored Event Types", () => {
+    it("safely ignores event types not subscribed without dispatching", async () => {
+      const verifier = createMockVerifier();
+      const mockEventSink: WebhookEventSink = {
+        emit: vi.fn(),
+      };
+
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+        eventSink: mockEventSink,
+      });
+
+      const payload = {
+        id: "WH-EVT-999",
+        event_type: "PAYMENT.SALE.COMPLETED",
+        resource: { id: "SALE-123" },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+      const result = await router.handleWebhook(req);
+
+      expect(result.status).toBe("IGNORED");
+      expect(result.httpStatus).toBe(200);
+      expect(result.eventType).toBe("PAYMENT.SALE.COMPLETED");
+      expect(mockEventSink.emit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Replay Protection & Duplicate Handling", () => {
+    it("returns DUPLICATE with HTTP 200 without re-dispatching domain events", async () => {
+      const verifier = createMockVerifier();
+      const mockEventSink: WebhookEventSink = {
+        emit: vi.fn(),
+      };
+
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+        eventSink: mockEventSink,
+      });
+
+      const payload = {
+        id: "WH-EVT-DUP",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: { id: "AUTH-DUP" },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+
+      // First call processes
+      const res1 = await router.handleWebhook(req);
+      expect(res1.status).toBe("PROCESSED");
+      expect(mockEventSink.emit).toHaveBeenCalledTimes(1);
+
+      // Duplicate transmission ID
+      const res2 = await router.handleWebhook(req);
+      expect(res2.status).toBe("DUPLICATE");
+      expect(res2.httpStatus).toBe(200);
+      expect(res2.message).toContain("Duplicate transmission acknowledged and ignored");
+      expect(mockEventSink.emit).toHaveBeenCalledTimes(1); // Not called again!
+    });
+  });
+
+  describe("Security & Validation Rejections", () => {
+    it("rejects invalid cryptographic signature with HTTP 401", async () => {
+      const verifier = createMockVerifier();
+      const mockEventSink: WebhookEventSink = {
+        emit: vi.fn(),
+      };
+
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+        eventSink: mockEventSink,
+      });
+
+      const payload = {
+        id: "WH-EVT-TAMPER",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: { id: "AUTH-TAMPER" },
+      };
+
+      const req = createSignedWebhookRequest({
+        rawBody: JSON.stringify(payload),
+        tamperSignature: true,
+      });
+
+      const result = await router.handleWebhook(req);
+      expect(result.status).toBe("INVALID_SIGNATURE");
+      expect(result.httpStatus).toBe(401);
+      expect(mockEventSink.emit).not.toHaveBeenCalled();
+    });
+
+    it("rejects untrusted certificate URLs with HTTP 401", async () => {
+      const verifier = createMockVerifier();
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      const payload = {
+        id: "WH-EVT-EVIL",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: { id: "AUTH-1" },
+      };
+
+      const req = createSignedWebhookRequest({
+        rawBody: JSON.stringify(payload),
+        certUrl: "https://evil.com/cert.pem",
+      });
+
+      const result = await router.handleWebhook(req);
+      expect(result.status).toBe("INVALID_SIGNATURE");
+      expect(result.httpStatus).toBe(401);
+      expect(result.message).toContain("Untrusted certificate URL rejected");
+    });
+
+    it("returns MALFORMED_PAYLOAD with HTTP 400 on non-JSON raw body", async () => {
+      const verifier = createMockVerifier();
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      const req = createSignedWebhookRequest({
+        rawBody: "this is not JSON at all",
+      });
+
+      const result = await router.handleWebhook(req);
+      expect(result.status).toBe("MALFORMED_PAYLOAD");
+      expect(result.httpStatus).toBe(400);
+    });
+
+    it("returns MALFORMED_PAYLOAD with HTTP 400 when missing required event fields", async () => {
+      const verifier = createMockVerifier();
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      const req = createSignedWebhookRequest({
+        rawBody: JSON.stringify({ notAnEvent: true }),
+      });
+
+      const result = await router.handleWebhook(req);
+      expect(result.status).toBe("MALFORMED_PAYLOAD");
+      expect(result.httpStatus).toBe(400);
+    });
+  });
+
+  describe("Dispatch Error Resilience", () => {
+    it("returns DISPATCH_ERROR with HTTP 500 when eventSink throws without crashing process", async () => {
+      const verifier = createMockVerifier();
+      const failingEventSink: WebhookEventSink = {
+        emit: vi.fn().mockRejectedValue(new Error("Database connection lost")),
+      };
+
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+        eventSink: failingEventSink,
+      });
+
+      const payload = {
+        id: "WH-EVT-CRASH",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: { id: "AUTH-CRASH" },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+
+      const result = await router.handleWebhook(req);
+      expect(result.status).toBe("DISPATCH_ERROR");
+      expect(result.httpStatus).toBe(500);
+      expect(result.error).toContain("Database connection lost");
+    });
+  });
+
+  describe("High-level routeWebhook function", () => {
+    it("processes webhook through standalone routeWebhook function", async () => {
+      const verifier = createMockVerifier();
+      const payload = {
+        id: "WH-EVT-TOP",
+        event_type: "PAYMENT.AUTHORIZATION.VOIDED",
+        resource: { id: "AUTH-TOP-VOID" },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+
+      const result = await routeWebhook(req, {
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      expect(result.status).toBe("PROCESSED");
+      expect(result.httpStatus).toBe(200);
+      expect(result.eventType).toBe("PAYMENT.AUTHORIZATION.VOIDED");
+    });
+  });
+});

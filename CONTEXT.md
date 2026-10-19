@@ -33,6 +33,10 @@ A sliding-window time accumulator (1-hour, 24-hour, 30-day) tracking cumulative 
 ### Human-in-the-Loop (HITL) Threshold
 A configurable risk scoring ceiling (typically $\ge 70/100$ or transaction values exceeding $250.00) that pauses autonomous execution and routes the transaction to the supervisor approval queue for a counter-signature.
 
+### Cryptographic Webhook Ingestion & Verification
+The asynchronous event ingestion pipeline validating PayPal webhook notifications. Authenticates incoming notifications using byte-for-byte CRC32 hashing over raw request buffers and RSA signature verification against PayPal's whitelisted X.509 signing certificates (`^https://api(\-m)?\.(sandbox\.)?paypal\.com/`). Defends against replay attacks with 24-hour transmission ID idempotency caching and translates verified notifications (`PAYMENT.AUTHORIZATION.CREATED`, `PAYMENT.AUTHORIZATION.VOIDED`) into typed Clearinghouse domain events.
+
+
 ---
 
 ## 2. Codebase Architecture Vocabulary (`codebase-design`)
