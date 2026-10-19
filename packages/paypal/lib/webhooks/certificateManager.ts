@@ -43,7 +43,7 @@ export class CertificateManager {
 
   constructor(config: CertificateManagerConfig = {}) {
     this.ttlMs = config.ttlMs ?? 24 * 60 * 60 * 1000; // 24 hours
-    this.maxSize = config.maxSize ?? 100;
+    this.maxSize = Math.max(1, config.maxSize ?? 100);
     this.fetchTimeoutMs = config.fetchTimeoutMs ?? 10_000;
     this.customFetch = config.customFetch ?? globalThis.fetch;
   }
@@ -61,37 +61,44 @@ export class CertificateManager {
       });
     }
 
-    if (!PAYPAL_CERT_URL_REGEX.test(certUrl)) {
-      throw new UntrustedCertificateUrlError(certUrl, {
+    const trimmedUrl = certUrl.trim();
+    if (!PAYPAL_CERT_URL_REGEX.test(trimmedUrl)) {
+      throw new UntrustedCertificateUrlError(trimmedUrl, {
         reason: "URL does not match trusted PayPal pattern",
       });
     }
 
     let parsed: URL;
     try {
-      parsed = new URL(certUrl);
+      parsed = new URL(trimmedUrl);
     } catch (err) {
-      throw new UntrustedCertificateUrlError(certUrl, {
+      throw new UntrustedCertificateUrlError(trimmedUrl, {
         reason: "Malformed certificate URL",
         error: (err as Error).message,
       });
     }
 
     if (parsed.protocol !== "https:") {
-      throw new UntrustedCertificateUrlError(certUrl, {
+      throw new UntrustedCertificateUrlError(trimmedUrl, {
         reason: "Certificate URL must use HTTPS",
+      });
+    }
+
+    if (parsed.username || parsed.password) {
+      throw new UntrustedCertificateUrlError(trimmedUrl, {
+        reason: "Certificate URL must not contain user credentials",
       });
     }
 
     const hostname = parsed.hostname.toLowerCase();
     if (!TRUSTED_HOSTNAMES.has(hostname)) {
-      throw new UntrustedCertificateUrlError(certUrl, {
+      throw new UntrustedCertificateUrlError(trimmedUrl, {
         reason: `Hostname "${hostname}" is not an authorized PayPal API endpoint`,
       });
     }
 
     if (parsed.port && parsed.port !== "443") {
-      throw new UntrustedCertificateUrlError(certUrl, {
+      throw new UntrustedCertificateUrlError(trimmedUrl, {
         reason: `Non-standard port "${parsed.port}" is not permitted for PayPal certificates`,
       });
     }
@@ -105,29 +112,30 @@ export class CertificateManager {
    */
   public async getCertificate(certUrl: string): Promise<string> {
     this.validateCertificateUrl(certUrl);
+    const normalizedUrl = certUrl.trim();
 
     const now = Date.now();
-    const cached = this.cache.get(certUrl);
+    const cached = this.cache.get(normalizedUrl);
     if (cached) {
       if (now < cached.expiresAt) {
         cached.lastAccessed = now;
         return cached.cert;
       }
-      this.cache.delete(certUrl);
+      this.cache.delete(normalizedUrl);
     }
 
-    const pending = this.inFlight.get(certUrl);
+    const pending = this.inFlight.get(normalizedUrl);
     if (pending) {
       return pending;
     }
 
-    const fetchPromise = this.fetchAndCache(certUrl);
-    this.inFlight.set(certUrl, fetchPromise);
+    const fetchPromise = this.fetchAndCache(normalizedUrl);
+    this.inFlight.set(normalizedUrl, fetchPromise);
 
     try {
       return await fetchPromise;
     } finally {
-      this.inFlight.delete(certUrl);
+      this.inFlight.delete(normalizedUrl);
     }
   }
 

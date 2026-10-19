@@ -63,6 +63,7 @@ export function signWebhookPayload(params: {
   privateKeyPem?: string;
   algorithm?: string;
   format?: "decimal" | "hex";
+  customCrc?: string;
 }): string {
   const privateKey = params.privateKeyPem ?? TEST_PRIVATE_KEY_PEM;
   const algo = params.algorithm ?? "RSA-SHA256";
@@ -73,7 +74,8 @@ export function signWebhookPayload(params: {
       : Buffer.from(params.rawBody);
 
   const crc = zlib.crc32(buf) >>> 0;
-  const crcStr = params.format === "hex" ? crc.toString(16) : crc.toString(10);
+  const crcStr =
+    params.customCrc ?? (params.format === "hex" ? crc.toString(16) : crc.toString(10));
   const msg = `${params.transmissionId}|${params.timestamp}|${params.webhookId}|${crcStr}`;
 
   const signer = crypto.createSign(algo);

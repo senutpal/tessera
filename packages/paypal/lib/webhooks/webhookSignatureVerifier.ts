@@ -28,6 +28,9 @@ const ALGORITHM_MAP: Record<string, string> = {
  * formatted as an unsigned 32-bit base-10 decimal integer string.
  */
 export function computeCrc32(rawBody: Buffer | Uint8Array | string): string {
+  if (rawBody === null || rawBody === undefined) {
+    throw new WebhookVerificationError("rawBody cannot be null or undefined for CRC32 computation");
+  }
   const buf = Buffer.isBuffer(rawBody)
     ? rawBody
     : typeof rawBody === "string"
@@ -42,6 +45,9 @@ export function computeCrc32(rawBody: Buffer | Uint8Array | string): string {
  * formatted as a lowercase hexadecimal string.
  */
 export function computeCrc32Hex(rawBody: Buffer | Uint8Array | string): string {
+  if (rawBody === null || rawBody === undefined) {
+    throw new WebhookVerificationError("rawBody cannot be null or undefined for CRC32 computation");
+  }
   const buf = Buffer.isBuffer(rawBody)
     ? rawBody
     : typeof rawBody === "string"
@@ -109,6 +115,16 @@ export class WebhookSignatureVerifier {
    * Verifies the authenticity of an incoming PayPal webhook notification.
    */
   public async verify(params: VerifyWebhookParams): Promise<WebhookVerificationResult> {
+    if (!params || typeof params !== "object") {
+      throw new WebhookVerificationError("VerifyWebhookParams must be a non-null object");
+    }
+
+    if (params.rawBody === null || params.rawBody === undefined) {
+      throw new WebhookVerificationError(
+        "Webhook rawBody is required and cannot be null or undefined",
+      );
+    }
+
     const headers = extractWebhookHeaders(params.headers);
     const webhookId = params.webhookId ?? params.options?.webhookId ?? this.defaultWebhookId;
 
@@ -118,22 +134,10 @@ export class WebhookSignatureVerifier {
       );
     }
 
-    const shouldCheckReplay = params.options?.checkReplay ?? true;
-    if (shouldCheckReplay) {
-      const isDuplicate = await this.idempotencyStore.has(headers.transmissionId);
-      if (isDuplicate) {
-        return {
-          isValid: true,
-          isDuplicate: true,
-          method: "LOCAL_ASYMMETRIC",
-          transmissionId: headers.transmissionId,
-          algorithm: headers.authAlgo,
-          certUrl: headers.certUrl,
-          failureReason: "Duplicate transmission ID detected within replay window",
-        };
-      }
-    }
+    // Always validate certUrl against whitelist before any local or remote processing
+    this.certificateManager.validateCertificateUrl(headers.certUrl);
 
+    // Clock skew validation
     const maxClockSkewMs = params.options?.maxClockSkewMs ?? this.maxClockSkewMs;
     if (maxClockSkewMs !== undefined && maxClockSkewMs > 0) {
       const txTime = Date.parse(headers.transmissionTime);
@@ -161,8 +165,7 @@ export class WebhookSignatureVerifier {
       }
     }
 
-    // Always validate certUrl against whitelist before any local or remote processing
-    this.certificateManager.validateCertificateUrl(headers.certUrl);
+    const shouldCheckReplay = params.options?.checkReplay ?? true;
 
     let localCheckPassed = false;
     let localError: Error | null = null;
@@ -179,7 +182,18 @@ export class WebhookSignatureVerifier {
 
     if (localCheckPassed) {
       if (shouldCheckReplay) {
-        await this.idempotencyStore.record(headers.transmissionId);
+        const isNewlyRecorded = await this.idempotencyStore.record(headers.transmissionId);
+        if (!isNewlyRecorded) {
+          return {
+            isValid: true,
+            isDuplicate: true,
+            method: "LOCAL_ASYMMETRIC",
+            transmissionId: headers.transmissionId,
+            algorithm: headers.authAlgo,
+            certUrl: headers.certUrl,
+            failureReason: "Duplicate transmission ID detected within replay window",
+          };
+        }
       }
       return {
         isValid: true,
@@ -198,7 +212,18 @@ export class WebhookSignatureVerifier {
         const remoteValid = await this.verifyRemotely(headers, params.rawBody, webhookId);
         if (remoteValid) {
           if (shouldCheckReplay) {
-            await this.idempotencyStore.record(headers.transmissionId);
+            const isNewlyRecorded = await this.idempotencyStore.record(headers.transmissionId);
+            if (!isNewlyRecorded) {
+              return {
+                isValid: true,
+                isDuplicate: true,
+                method: "REMOTE_POSTBACK",
+                transmissionId: headers.transmissionId,
+                algorithm: headers.authAlgo,
+                certUrl: headers.certUrl,
+                failureReason: "Duplicate transmission ID detected within replay window",
+              };
+            }
           }
           return {
             isValid: true,
@@ -288,7 +313,27 @@ export class WebhookSignatureVerifier {
 
     const verifier2 = crypto.createVerify(nodeAlgo);
     verifier2.update(hexMessage, "utf8");
-    return verifier2.verify(certPem, sigBuffer);
+    if (verifier2.verify(certPem, sigBuffer)) {
+      return true;
+    }
+
+    // Additional defensive check: 8-char zero-padded hex
+    if (crcHex.length < 8) {
+      const paddedHex = crcHex.padStart(8, "0");
+      const paddedMessage = buildVerificationMessage(
+        headers.transmissionId,
+        headers.transmissionTime,
+        webhookId,
+        paddedHex,
+      );
+      const verifier3 = crypto.createVerify(nodeAlgo);
+      verifier3.update(paddedMessage, "utf8");
+      if (verifier3.verify(certPem, sigBuffer)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private async verifyRemotely(

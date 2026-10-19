@@ -57,6 +57,15 @@ export class WebhookRouter {
    * results are encapsulated into a typed `WebhookProcessingResult` with HTTP status guidance.
    */
   public async handleWebhook(request: WebhookRequest): Promise<WebhookProcessingResult> {
+    if (!request || typeof request !== "object") {
+      return {
+        status: "MALFORMED_PAYLOAD",
+        httpStatus: 400,
+        message: "Webhook request must be an object",
+        error: "Missing or invalid webhook request payload",
+      };
+    }
+
     // 1. Cryptographic Signature & Idempotency Verification
     let verification: WebhookVerificationResult;
     try {
@@ -94,11 +103,26 @@ export class WebhookRouter {
     }
 
     // 2. Parse Raw Request Body into JSON
-    const rawString = Buffer.isBuffer(request.rawBody)
-      ? request.rawBody.toString("utf8")
-      : typeof request.rawBody === "string"
-        ? request.rawBody
-        : Buffer.from(request.rawBody).toString("utf8");
+    let rawString: string;
+    try {
+      if (Buffer.isBuffer(request.rawBody)) {
+        rawString = request.rawBody.toString("utf8");
+      } else if (typeof request.rawBody === "string") {
+        rawString = request.rawBody;
+      } else if (request.rawBody instanceof Uint8Array) {
+        rawString = Buffer.from(request.rawBody).toString("utf8");
+      } else {
+        throw new Error("rawBody must be a Buffer, Uint8Array, or string");
+      }
+    } catch (err) {
+      return {
+        status: "MALFORMED_PAYLOAD",
+        httpStatus: 400,
+        message: `Invalid webhook raw body type: ${(err as Error).message}`,
+        transmissionId: verification.transmissionId,
+        error: (err as Error).message,
+      };
+    }
 
     let parsedJson: unknown;
     try {
@@ -130,12 +154,36 @@ export class WebhookRouter {
     // 4. Transform & Dispatch by Event Type
     switch (event.event_type) {
       case "PAYMENT.AUTHORIZATION.CREATED": {
-        const domainEvent = this.transformAuthorizationCreated(event, verification.transmissionId);
+        let domainEvent: ClearinghouseAuthorizationCreatedEvent;
+        try {
+          domainEvent = this.transformAuthorizationCreated(event, verification.transmissionId);
+        } catch (err) {
+          return {
+            status: "MALFORMED_PAYLOAD",
+            httpStatus: 400,
+            message: `Failed to transform PAYMENT.AUTHORIZATION.CREATED resource: ${(err as Error).message}`,
+            eventType: event.event_type,
+            transmissionId: verification.transmissionId,
+            error: (err as Error).message,
+          };
+        }
         return this.dispatchEvent(domainEvent, event.event_type, verification.transmissionId);
       }
 
       case "PAYMENT.AUTHORIZATION.VOIDED": {
-        const domainEvent = this.transformAuthorizationVoided(event, verification.transmissionId);
+        let domainEvent: ClearinghouseAuthorizationVoidedEvent;
+        try {
+          domainEvent = this.transformAuthorizationVoided(event, verification.transmissionId);
+        } catch (err) {
+          return {
+            status: "MALFORMED_PAYLOAD",
+            httpStatus: 400,
+            message: `Failed to transform PAYMENT.AUTHORIZATION.VOIDED resource: ${(err as Error).message}`,
+            eventType: event.event_type,
+            transmissionId: verification.transmissionId,
+            error: (err as Error).message,
+          };
+        }
         return this.dispatchEvent(domainEvent, event.event_type, verification.transmissionId);
       }
 
@@ -163,8 +211,8 @@ export class WebhookRouter {
       ?.related_ids as Record<string, unknown> | undefined;
     const orderIdStr = relatedIds?.order_id
       ? String(relatedIds.order_id)
-      : resource.parent_payment
-        ? String(resource.parent_payment)
+      : resource.order_id
+        ? String(resource.order_id)
         : resource.custom_id
           ? String(resource.custom_id)
           : undefined;
@@ -204,8 +252,8 @@ export class WebhookRouter {
       ?.related_ids as Record<string, unknown> | undefined;
     const orderIdStr = relatedIds?.order_id
       ? String(relatedIds.order_id)
-      : resource.parent_payment
-        ? String(resource.parent_payment)
+      : resource.order_id
+        ? String(resource.order_id)
         : resource.custom_id
           ? String(resource.custom_id)
           : undefined;
@@ -234,8 +282,9 @@ export class WebhookRouter {
       return Money.zero("USD");
     }
     const record = rawAmount as Record<string, unknown>;
-    const currency = String(record.currency_code ?? record.currency ?? "USD");
-    const value = String(record.value ?? record.total ?? "0.00");
+    const rawCurrency = record.currency_code ?? record.currency ?? "USD";
+    const currency = String(rawCurrency).toUpperCase().trim();
+    const value = String(record.value ?? record.total ?? "0.00").trim();
     return Money.fromPayPal({ currency_code: currency, value });
   }
 

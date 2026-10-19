@@ -10,9 +10,13 @@ import type {
   PayPalConfig,
   VoidAuthorizationOptions,
 } from "../types/orders.js";
-import type { PayPalVerifyWebhookSignatureRequest } from "../types/webhooks.js";
-import { PayPalVerifyWebhookSignatureResponseSchema } from "../types/webhooks.js";
+import {
+  type PayPalVerifyWebhookSignatureRequest,
+  PayPalVerifyWebhookSignatureResponseSchema,
+  WebhookVerificationError,
+} from "../types/webhooks.js";
 import { PayPalAuthClient } from "./paypalAuthClient.js";
+import { throwPayPalError } from "./paypalErrors.js";
 
 export class PayPalClient {
   public readonly auth: PayPalAuthClient;
@@ -69,6 +73,13 @@ export class PayPalClient {
     });
 
     if (!res.ok) {
+      if (res.status >= 500) {
+        await throwPayPalError(
+          res,
+          "Failed to verify webhook signature via PayPal API",
+          (msg, d) => new WebhookVerificationError(msg, d),
+        );
+      }
       return false;
     }
 
