@@ -148,6 +148,33 @@ describe("WebhookRouter", () => {
       expect(event.amount.amount).toBe(4950);
       expect(event.amount.currency).toBe("USD");
     });
+
+    it("does not map custom_id to orderId and preserves customId in its own field", async () => {
+      const verifier = createMockVerifier();
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      const payload = {
+        id: "WH-EVT-CUSTOM-ID",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: {
+          id: "AUTH-CUST-1",
+          custom_id: "MERCHANT-CUSTOM-REF-999",
+          status: "CREATED",
+          amount: { currency_code: "USD", value: "100.00" },
+        },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+      const result = await router.handleWebhook(req);
+
+      expect(result.status).toBe("PROCESSED");
+      const event = result.domainEvent as ClearinghouseAuthorizationCreatedEvent;
+      expect(event.orderId).toBeUndefined(); // MUST NOT map custom_id to orderId
+      expect(event.customId).toBe("MERCHANT-CUSTOM-REF-999");
+    });
   });
 
   describe("Routing PAYMENT.AUTHORIZATION.VOIDED", () => {
@@ -388,6 +415,30 @@ describe("WebhookRouter", () => {
       expect(result.status).toBe("MALFORMED_PAYLOAD");
       expect(result.httpStatus).toBe(400);
       expect(result.message).toContain("Failed to transform");
+    });
+
+    it("returns MALFORMED_PAYLOAD with HTTP 400 when resource.id is missing or empty", async () => {
+      const verifier = createMockVerifier();
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      const payload = {
+        id: "WH-EVT-MISSING-ID",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: {
+          status: "CREATED",
+          amount: { currency_code: "USD", value: "10.00" },
+        },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+      const result = await router.handleWebhook(req);
+
+      expect(result.status).toBe("MALFORMED_PAYLOAD");
+      expect(result.httpStatus).toBe(400);
+      expect(result.message).toContain("Missing or empty required resource.id");
     });
   });
 
