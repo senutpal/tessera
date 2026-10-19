@@ -41,11 +41,18 @@ describe("CertificateManager", () => {
         "https://api.paypal.com:8443/cert.pem", // Non-standard port
         "javascript:alert(1)",
         "https://127.0.0.1/cert.pem",
+        "https://admin:secret@api.paypal.com/cert.pem", // Embedded credentials
       ];
 
       for (const url of maliciousUrls) {
         expect(() => manager.validateCertificateUrl(url)).toThrow(UntrustedCertificateUrlError);
       }
+    });
+
+    it("accepts valid URL with surrounding whitespace", () => {
+      expect(manager.validateCertificateUrl("  https://api.sandbox.paypal.com/cert.pem  ")).toBe(
+        true,
+      );
     });
 
     it("rejects empty or malformed input", () => {

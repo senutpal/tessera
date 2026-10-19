@@ -9,11 +9,11 @@ import { PayPalLinkSchema } from "./orders.js";
 export const PAYPAL_CERT_URL_REGEX = /^https:\/\/api(-m)?\.(sandbox\.)?paypal\.com(?::443)?\//i;
 
 export const PayPalWebhookHeadersSchema = z.object({
-  authAlgo: z.string().min(1, "Missing PAYPAL-AUTH-ALGO header"),
-  certUrl: z.string().url("Invalid PAYPAL-CERT-URL format"),
-  transmissionId: z.string().min(1, "Missing PAYPAL-TRANSMISSION-ID header"),
-  transmissionSig: z.string().min(1, "Missing PAYPAL-TRANSMISSION-SIG header"),
-  transmissionTime: z.string().min(1, "Missing PAYPAL-TRANSMISSION-TIME header"),
+  authAlgo: z.string().trim().min(1, "Missing PAYPAL-AUTH-ALGO header"),
+  certUrl: z.string().trim().url("Invalid PAYPAL-CERT-URL format"),
+  transmissionId: z.string().trim().min(1, "Missing PAYPAL-TRANSMISSION-ID header"),
+  transmissionSig: z.string().trim().min(1, "Missing PAYPAL-TRANSMISSION-SIG header"),
+  transmissionTime: z.string().trim().min(1, "Missing PAYPAL-TRANSMISSION-TIME header"),
 });
 export type PayPalWebhookHeaders = z.infer<typeof PayPalWebhookHeadersSchema>;
 
@@ -191,6 +191,12 @@ export class WebhookRoutingError extends DomainError {
 export function extractWebhookHeaders(
   rawHeaders: Record<string, string | string[] | undefined> | Headers | PayPalWebhookHeaders,
 ): PayPalWebhookHeaders {
+  if (!rawHeaders || typeof rawHeaders !== "object") {
+    throw new WebhookVerificationError(
+      "Missing required PayPal webhook headers: headers argument must be an object",
+    );
+  }
+
   // If already normalized object
   if (
     "authAlgo" in rawHeaders &&
@@ -199,24 +205,60 @@ export function extractWebhookHeaders(
     "transmissionSig" in rawHeaders &&
     "transmissionTime" in rawHeaders
   ) {
-    return PayPalWebhookHeadersSchema.parse(rawHeaders);
+    const normalized = rawHeaders as PayPalWebhookHeaders;
+    return PayPalWebhookHeadersSchema.parse({
+      authAlgo:
+        typeof normalized.authAlgo === "string" ? normalized.authAlgo.trim() : normalized.authAlgo,
+      certUrl:
+        typeof normalized.certUrl === "string" ? normalized.certUrl.trim() : normalized.certUrl,
+      transmissionId:
+        typeof normalized.transmissionId === "string"
+          ? normalized.transmissionId.trim()
+          : normalized.transmissionId,
+      transmissionSig:
+        typeof normalized.transmissionSig === "string"
+          ? normalized.transmissionSig.trim()
+          : normalized.transmissionSig,
+      transmissionTime:
+        typeof normalized.transmissionTime === "string"
+          ? normalized.transmissionTime.trim()
+          : normalized.transmissionTime,
+    });
   }
 
   const lookup = (key: string): string | undefined => {
+    let rawVal: string | undefined;
     if (typeof (rawHeaders as Headers).get === "function") {
-      return (rawHeaders as Headers).get(key) ?? undefined;
-    }
-    const record = rawHeaders as Record<string, string | string[] | undefined>;
-    const target = key.toLowerCase();
-    for (const [k, v] of Object.entries(record)) {
-      if (k.toLowerCase() === target) {
-        if (Array.isArray(v)) {
-          return v[0];
+      rawVal = (rawHeaders as Headers).get(key) ?? undefined;
+    } else {
+      const record = rawHeaders as Record<string, string | string[] | undefined>;
+      const target = key.toLowerCase();
+      for (const [k, v] of Object.entries(record)) {
+        if (k.toLowerCase() === target) {
+          if (Array.isArray(v)) {
+            const firstNonEmpty = v.find((x) => typeof x === "string" && x.trim().length > 0);
+            rawVal = firstNonEmpty;
+          } else if (typeof v === "string") {
+            rawVal = v;
+          }
+          break;
         }
-        return v;
       }
     }
-    return undefined;
+
+    if (!rawVal) return undefined;
+    const trimmed = rawVal.trim();
+    if (!trimmed) return undefined;
+
+    // Handle proxies that combine duplicated headers with commas (e.g. "sig1, sig2" or "url, url")
+    if (trimmed.includes(",")) {
+      const parts = trimmed
+        .split(",")
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0);
+      return parts[0] ?? undefined;
+    }
+    return trimmed;
   };
 
   const authAlgo = lookup("paypal-auth-algo");

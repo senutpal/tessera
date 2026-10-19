@@ -78,6 +78,7 @@ describe("WebhookRouter", () => {
       const domainEvent = result.domainEvent as ClearinghouseAuthorizationCreatedEvent;
       expect(domainEvent.type).toBe("PAYMENT.AUTHORIZATION.CREATED");
       expect(domainEvent.authorizationId).toBe("2DC87612EK520411B");
+      expect(domainEvent.orderId).toBeUndefined(); // parent_payment must NOT be assigned to orderId
       expect(domainEvent.amount.amount).toBe(24999);
       expect(domainEvent.amount.currency).toBe("USD");
       expect(domainEvent.status).toBe("CREATED");
@@ -118,6 +119,34 @@ describe("WebhookRouter", () => {
       const event = result.domainEvent as ClearinghouseAuthorizationCreatedEvent;
       expect(event.orderId).toBe("ORD-999-XYZ");
       expect(event.amount.amount).toBe(1000);
+    });
+
+    it("extracts orderId directly from resource.order_id and normalizes lowercase currency", async () => {
+      const verifier = createMockVerifier();
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      const payload = {
+        id: "WH-EVT-DIRECT-ORD",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: {
+          id: "AUTH-DIR-1",
+          order_id: "ORD-DIRECT-555",
+          status: "CREATED",
+          amount: { currency: "usd", total: "49.50" }, // lowercase currency
+        },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+      const result = await router.handleWebhook(req);
+
+      expect(result.status).toBe("PROCESSED");
+      const event = result.domainEvent as ClearinghouseAuthorizationCreatedEvent;
+      expect(event.orderId).toBe("ORD-DIRECT-555");
+      expect(event.amount.amount).toBe(4950);
+      expect(event.amount.currency).toBe("USD");
     });
   });
 
@@ -320,6 +349,45 @@ describe("WebhookRouter", () => {
       const result = await router.handleWebhook(req);
       expect(result.status).toBe("MALFORMED_PAYLOAD");
       expect(result.httpStatus).toBe(400);
+    });
+
+    it("returns MALFORMED_PAYLOAD with HTTP 400 when request is null or not an object", async () => {
+      const verifier = createMockVerifier();
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      // @ts-expect-error Testing invalid runtime request
+      const result = await router.handleWebhook(null);
+      expect(result.status).toBe("MALFORMED_PAYLOAD");
+      expect(result.httpStatus).toBe(400);
+      expect(result.message).toContain("Webhook request must be an object");
+    });
+
+    it("returns MALFORMED_PAYLOAD with HTTP 400 when resource has invalid monetary amount", async () => {
+      const verifier = createMockVerifier();
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      const payload = {
+        id: "WH-EVT-BAD-AMT",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: {
+          id: "AUTH-BAD-AMT",
+          status: "CREATED",
+          amount: { currency_code: "INVALID_CURRENCY", value: "not-a-number" },
+        },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+      const result = await router.handleWebhook(req);
+
+      expect(result.status).toBe("MALFORMED_PAYLOAD");
+      expect(result.httpStatus).toBe(400);
+      expect(result.message).toContain("Failed to transform");
     });
   });
 

@@ -238,6 +238,61 @@ describe("WebhookSignatureVerifier", () => {
         }),
       ).rejects.toThrow(WebhookVerificationError);
     });
+
+    it("throws WebhookVerificationError when headers is null or undefined", async () => {
+      const certManager = createMockCertificateManager();
+      const verifier = new WebhookSignatureVerifier({
+        certificateManager: certManager,
+        defaultWebhookId: TEST_WEBHOOK_ID,
+      });
+
+      // @ts-expect-error Testing invalid runtime headers
+      await expect(verifier.verify({ headers: null, rawBody: "{}" })).rejects.toThrow(
+        WebhookVerificationError,
+      );
+    });
+
+    it("throws WebhookVerificationError when rawBody is null or undefined", async () => {
+      const certManager = createMockCertificateManager();
+      const verifier = new WebhookSignatureVerifier({
+        certificateManager: certManager,
+        defaultWebhookId: TEST_WEBHOOK_ID,
+      });
+
+      const req = createSignedWebhookRequest({ rawBody: "{}" });
+      // @ts-expect-error Testing invalid runtime rawBody
+      await expect(verifier.verify({ ...req, rawBody: null })).rejects.toThrow(
+        WebhookVerificationError,
+      );
+    });
+
+    it("normalizes headers with leading/trailing whitespace and proxy duplicates", async () => {
+      const certManager = createMockCertificateManager();
+      const verifier = new WebhookSignatureVerifier({
+        certificateManager: certManager,
+        defaultWebhookId: TEST_WEBHOOK_ID,
+      });
+
+      const body = '{"status":"APPROVED"}';
+      const req = createSignedWebhookRequest({ rawBody: body });
+
+      // Add whitespace and reverse-proxy duplicate comma-separated values
+      const proxyHeaders = {
+        "paypal-auth-algo": `  ${req.headers["paypal-auth-algo"]}  `,
+        "paypal-cert-url": `${req.headers["paypal-cert-url"]}, ${req.headers["paypal-cert-url"]}`,
+        "paypal-transmission-id": `  ${req.headers["paypal-transmission-id"]}  `,
+        "paypal-transmission-sig": req.headers["paypal-transmission-sig"],
+        "paypal-transmission-time": `  ${req.headers["paypal-transmission-time"]}  `,
+      };
+
+      const result = await verifier.verify({
+        headers: proxyHeaders,
+        rawBody: body,
+      });
+
+      expect(result.isValid).toBe(true);
+      expect(result.transmissionId).toBe(req.headers["paypal-transmission-id"]);
+    });
   });
 
   describe("Replay Protection & Idempotency", () => {
@@ -263,6 +318,60 @@ describe("WebhookSignatureVerifier", () => {
       expect(res2.isValid).toBe(true);
       expect(res2.isDuplicate).toBe(true);
       expect(res2.failureReason).toContain("Duplicate transmission ID");
+    });
+
+    it("rejects replayed transmission ID when signature is tampered (does not bypass verification)", async () => {
+      const certManager = createMockCertificateManager();
+      const idempotencyStore = new InMemoryWebhookIdempotencyStore();
+      const verifier = new WebhookSignatureVerifier({
+        certificateManager: certManager,
+        idempotencyStore,
+        defaultWebhookId: TEST_WEBHOOK_ID,
+      });
+
+      const body = '{"event":"legit"}';
+      const req = createSignedWebhookRequest({ rawBody: body });
+
+      // First call is authentic
+      const res1 = await verifier.verify(req);
+      expect(res1.isValid).toBe(true);
+
+      // Attacker replays same transmission ID but tampers the body/signature
+      const tamperedReq = {
+        ...req,
+        rawBody: '{"event":"forged"}',
+      };
+      const res2 = await verifier.verify(tamperedReq);
+
+      expect(res2.isValid).toBe(false);
+      expect(res2.isDuplicate).toBe(false);
+      expect(res2.failureReason).toContain("signature mismatch");
+    });
+
+    it("rejects replayed transmission ID when certUrl is untrusted", async () => {
+      const certManager = createMockCertificateManager();
+      const idempotencyStore = new InMemoryWebhookIdempotencyStore();
+      const verifier = new WebhookSignatureVerifier({
+        certificateManager: certManager,
+        idempotencyStore,
+        defaultWebhookId: TEST_WEBHOOK_ID,
+      });
+
+      const body = '{"event":"legit"}';
+      const req = createSignedWebhookRequest({ rawBody: body });
+
+      const res1 = await verifier.verify(req);
+      expect(res1.isValid).toBe(true);
+
+      const attackerReq = {
+        ...req,
+        headers: {
+          ...req.headers,
+          "paypal-cert-url": "https://attacker.evil.com/cert.pem",
+        },
+      };
+
+      await expect(verifier.verify(attackerReq)).rejects.toThrow(UntrustedCertificateUrlError);
     });
 
     it("allows bypassing replay check when checkReplay is false", async () => {
@@ -384,6 +493,75 @@ describe("WebhookSignatureVerifier", () => {
       expect(mockPayPalClient.verifyWebhookSignature).toHaveBeenCalledTimes(1);
       expect(result.isValid).toBe(false);
       expect(result.method).toBe("REMOTE_POSTBACK");
+    });
+
+    it("captures remote failure reason when PayPal API throws server error", async () => {
+      const certManager = createMockCertificateManager();
+      const mockPayPalClient = {
+        verifyWebhookSignature: vi
+          .fn()
+          .mockRejectedValue(new Error("PayPal API 500 Internal Error")),
+      } as unknown as PayPalClient;
+
+      const verifier = new WebhookSignatureVerifier({
+        certificateManager: certManager,
+        payPalClient: mockPayPalClient,
+        defaultWebhookId: TEST_WEBHOOK_ID,
+        fallbackToRemote: true,
+      });
+
+      const body = '{"status":"ERR"}';
+      const req = createSignedWebhookRequest({
+        rawBody: body,
+        tamperSignature: true,
+      });
+
+      const result = await verifier.verify(req);
+
+      expect(result.isValid).toBe(false);
+      expect(result.method).toBe("REMOTE_POSTBACK");
+      expect(result.failureReason).toContain("PayPal API 500 Internal Error");
+    });
+  });
+
+  describe("Hex CRC32 zero-padding resilience", () => {
+    it("accepts signatures generated with 8-character zero-padded hex CRC32", async () => {
+      const certManager = createMockCertificateManager();
+      const verifier = new WebhookSignatureVerifier({
+        certificateManager: certManager,
+        defaultWebhookId: TEST_WEBHOOK_ID,
+      });
+
+      // Craft a payload and test padded hex signature
+      const body = '{"test":"padded_hex"}';
+      const hexCrc = computeCrc32Hex(body);
+      const paddedHexCrc = hexCrc.padStart(8, "0");
+
+      const transmissionId = "tx-padded-hex-99";
+      const timestamp = new Date().toISOString();
+
+      const { signWebhookPayload } = await import("./testCryptoHelpers.js");
+
+      const sig = signWebhookPayload({
+        transmissionId,
+        timestamp,
+        webhookId: TEST_WEBHOOK_ID,
+        rawBody: body,
+        customCrc: paddedHexCrc,
+      });
+
+      const result = await verifier.verify({
+        headers: {
+          "paypal-auth-algo": "SHA256withRSA",
+          "paypal-cert-url": TEST_CERT_URL,
+          "paypal-transmission-id": transmissionId,
+          "paypal-transmission-sig": sig,
+          "paypal-transmission-time": timestamp,
+        },
+        rawBody: body,
+      });
+
+      expect(result.isValid).toBe(true);
     });
   });
 });
