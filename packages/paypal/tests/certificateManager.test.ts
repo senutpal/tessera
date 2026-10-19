@@ -218,6 +218,26 @@ describe("CertificateManager", () => {
 
       await expect(manager.getCertificate(TEST_CERT_URL)).rejects.toThrow(WebhookVerificationError);
     });
+
+    it("rejects HTTP redirects during certificate fetch", async () => {
+      const mockFetch = vi.fn().mockImplementation((_url, init) => {
+        if (init?.redirect === "error") {
+          return Promise.reject(new TypeError("fetch failed: redirect mode is set to error"));
+        }
+        return Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { Location: "https://evil.attacker.com/cert.pem" },
+          }),
+        );
+      });
+
+      const manager = new CertificateManager({
+        customFetch: mockFetch as unknown as typeof fetch,
+      });
+
+      await expect(manager.getCertificate(TEST_CERT_URL)).rejects.toThrow(PayPalApiError);
+    });
   });
 
   describe("getPublicKey", () => {
