@@ -435,6 +435,46 @@ describe("WebhookSignatureVerifier", () => {
       expect(result.isValid).toBe(false);
       expect(result.failureReason).toContain("Malformed transmission timestamp");
     });
+
+    it("rejects timestamps older than default 5-minute clock skew bound without explicit config", async () => {
+      const certManager = createMockCertificateManager();
+      const verifier = new WebhookSignatureVerifier({
+        certificateManager: certManager,
+        defaultWebhookId: TEST_WEBHOOK_ID,
+      });
+
+      const body = '{"status":"OK"}';
+      // 6 minutes in the past
+      const oldTime = new Date(Date.now() - 6 * 60_000).toISOString();
+      const req = createSignedWebhookRequest({
+        rawBody: body,
+        timestamp: oldTime,
+      });
+
+      const result = await verifier.verify(req);
+      expect(result.isValid).toBe(false);
+      expect(result.failureReason).toContain("exceeds maximum allowable clock skew of 300000ms");
+    });
+
+    it("allows disabling clock skew check by explicitly passing maxClockSkewMs: 0", async () => {
+      const certManager = createMockCertificateManager();
+      const verifier = new WebhookSignatureVerifier({
+        certificateManager: certManager,
+        defaultWebhookId: TEST_WEBHOOK_ID,
+        maxClockSkewMs: 0,
+      });
+
+      const body = '{"status":"OK"}';
+      // 1 hour in the past
+      const oldTime = new Date(Date.now() - 60 * 60_000).toISOString();
+      const req = createSignedWebhookRequest({
+        rawBody: body,
+        timestamp: oldTime,
+      });
+
+      const result = await verifier.verify(req);
+      expect(result.isValid).toBe(true);
+    });
   });
 
   describe("Remote Postback Fallback", () => {

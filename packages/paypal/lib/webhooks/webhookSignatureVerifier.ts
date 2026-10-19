@@ -70,6 +70,8 @@ export function buildVerificationMessage(
   return `${transmissionId}|${timestamp}|${webhookId}|${crc32}`;
 }
 
+export const DEFAULT_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000; // 5 minutes default clock skew bound
+
 export interface WebhookSignatureVerifierConfig {
   certificateManager?: CertificateManager | undefined;
   idempotencyStore?: IWebhookIdempotencyStore | undefined;
@@ -99,7 +101,7 @@ export class WebhookSignatureVerifier {
   public readonly idempotencyStore: IWebhookIdempotencyStore;
   private readonly payPalClient?: PayPalClient | undefined;
   private readonly defaultWebhookId?: string | undefined;
-  private readonly maxClockSkewMs?: number | undefined;
+  private readonly maxClockSkewMs: number;
   private readonly fallbackToRemote: boolean;
 
   constructor(config: WebhookSignatureVerifierConfig = {}) {
@@ -107,7 +109,7 @@ export class WebhookSignatureVerifier {
     this.idempotencyStore = config.idempotencyStore ?? new InMemoryWebhookIdempotencyStore();
     this.payPalClient = config.payPalClient;
     this.defaultWebhookId = config.defaultWebhookId;
-    this.maxClockSkewMs = config.maxClockSkewMs;
+    this.maxClockSkewMs = config.maxClockSkewMs ?? DEFAULT_MAX_CLOCK_SKEW_MS;
     this.fallbackToRemote = config.fallbackToRemote ?? false;
   }
 

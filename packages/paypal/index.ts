@@ -91,6 +91,7 @@ export {
   buildVerificationMessage,
   computeCrc32,
   computeCrc32Hex,
+  DEFAULT_MAX_CLOCK_SKEW_MS,
   type VerifyWebhookParams,
   WebhookSignatureVerifier,
   type WebhookSignatureVerifierConfig,

@@ -202,6 +202,7 @@ export class CertificateManager {
     try {
       res = await this.customFetch(certUrl, {
         method: "GET",
+        redirect: "error",
         signal: controller.signal,
         headers: {
           Accept: "application/x-pem-file, text/plain, */*",
