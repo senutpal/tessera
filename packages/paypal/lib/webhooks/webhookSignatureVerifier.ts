@@ -287,7 +287,7 @@ export class WebhookSignatureVerifier {
       return false;
     }
 
-    // Primary: Decimal representation of CRC32 (as specified by PayPal documentation)
+    // Decimal representation of CRC32 (as specified by PayPal documentation)
     const crcDecimal = computeCrc32(rawBody);
     const decimalMessage = buildVerificationMessage(
       headers.transmissionId,
@@ -296,44 +296,9 @@ export class WebhookSignatureVerifier {
       crcDecimal,
     );
 
-    const verifier1 = crypto.createVerify(nodeAlgo);
-    verifier1.update(decimalMessage, "utf8");
-    if (verifier1.verify(certPem, sigBuffer)) {
-      return true;
-    }
-
-    // Defensive secondary check: Lowercase Hex representation of CRC32
-    const crcHex = computeCrc32Hex(rawBody);
-    const hexMessage = buildVerificationMessage(
-      headers.transmissionId,
-      headers.transmissionTime,
-      webhookId,
-      crcHex,
-    );
-
-    const verifier2 = crypto.createVerify(nodeAlgo);
-    verifier2.update(hexMessage, "utf8");
-    if (verifier2.verify(certPem, sigBuffer)) {
-      return true;
-    }
-
-    // Additional defensive check: 8-char zero-padded hex
-    if (crcHex.length < 8) {
-      const paddedHex = crcHex.padStart(8, "0");
-      const paddedMessage = buildVerificationMessage(
-        headers.transmissionId,
-        headers.transmissionTime,
-        webhookId,
-        paddedHex,
-      );
-      const verifier3 = crypto.createVerify(nodeAlgo);
-      verifier3.update(paddedMessage, "utf8");
-      if (verifier3.verify(certPem, sigBuffer)) {
-        return true;
-      }
-    }
-
-    return false;
+    const verifier = crypto.createVerify(nodeAlgo);
+    verifier.update(decimalMessage, "utf8");
+    return verifier.verify(certPem, sigBuffer);
   }
 
   private async verifyRemotely(

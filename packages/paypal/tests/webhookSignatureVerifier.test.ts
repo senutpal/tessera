@@ -77,7 +77,7 @@ describe("WebhookSignatureVerifier", () => {
       expect(result.algorithm).toBe("SHA256withRSA");
     });
 
-    it("accepts signatures generated with hex CRC32 format via defensive fallback", async () => {
+    it("rejects signatures generated with hex CRC32 format per PayPal specification", async () => {
       const certManager = createMockCertificateManager();
       const verifier = new WebhookSignatureVerifier({
         certificateManager: certManager,
@@ -108,8 +108,8 @@ describe("WebhookSignatureVerifier", () => {
         webhookId: TEST_WEBHOOK_ID,
       });
 
-      expect(result.isValid).toBe(true);
-      expect(result.method).toBe("LOCAL_ASYMMETRIC");
+      expect(result.isValid).toBe(false);
+      expect(result.failureReason).toContain("Cryptographic signature mismatch");
     });
 
     it("rejects payload if body was altered by even a single byte", async () => {
@@ -521,47 +521,6 @@ describe("WebhookSignatureVerifier", () => {
       expect(result.isValid).toBe(false);
       expect(result.method).toBe("REMOTE_POSTBACK");
       expect(result.failureReason).toContain("PayPal API 500 Internal Error");
-    });
-  });
-
-  describe("Hex CRC32 zero-padding resilience", () => {
-    it("accepts signatures generated with 8-character zero-padded hex CRC32", async () => {
-      const certManager = createMockCertificateManager();
-      const verifier = new WebhookSignatureVerifier({
-        certificateManager: certManager,
-        defaultWebhookId: TEST_WEBHOOK_ID,
-      });
-
-      // Craft a payload and test padded hex signature
-      const body = '{"test":"padded_hex"}';
-      const hexCrc = computeCrc32Hex(body);
-      const paddedHexCrc = hexCrc.padStart(8, "0");
-
-      const transmissionId = "tx-padded-hex-99";
-      const timestamp = new Date().toISOString();
-
-      const { signWebhookPayload } = await import("./testCryptoHelpers.js");
-
-      const sig = signWebhookPayload({
-        transmissionId,
-        timestamp,
-        webhookId: TEST_WEBHOOK_ID,
-        rawBody: body,
-        customCrc: paddedHexCrc,
-      });
-
-      const result = await verifier.verify({
-        headers: {
-          "paypal-auth-algo": "SHA256withRSA",
-          "paypal-cert-url": TEST_CERT_URL,
-          "paypal-transmission-id": transmissionId,
-          "paypal-transmission-sig": sig,
-          "paypal-transmission-time": timestamp,
-        },
-        rawBody: body,
-      });
-
-      expect(result.isValid).toBe(true);
     });
   });
 });
