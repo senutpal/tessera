@@ -121,8 +121,6 @@ export class Channel3Client {
           signal: controller.signal,
         });
 
-        clearTimeout(timer);
-
         // If server returns rate limit (429) or transient 5xx, retry
         if (response.status === 429 || (response.status >= 500 && response.status <= 504)) {
           const bodyText = await response.text().catch(() => "");
@@ -151,8 +149,6 @@ export class Channel3Client {
 
         return parsedWireResult;
       } catch (err: unknown) {
-        clearTimeout(timer);
-
         if (err instanceof Channel3Error) {
           throw err;
         }
@@ -171,6 +167,8 @@ export class Channel3Client {
         }
 
         lastError = err instanceof Error ? err : new Error(String(err));
+      } finally {
+        clearTimeout(timer);
       }
     }
 
