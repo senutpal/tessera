@@ -1,21 +1,18 @@
 import {
   asAuthorizationId,
   asOrderId,
-  ConflictError,
   EscrowAuthorizationError,
   MandateValidationError,
   Money,
-  NotFoundError,
-  UnauthorizedError,
 } from "@tessera/core";
 import type { PayPalAuthClient } from "../client/paypalAuthClient.js";
+import { throwPayPalError } from "../client/paypalErrors.js";
 import {
   type AuthorizeOrderOptions,
   type CreateEscrowOrderOptions,
   type EscrowAuthorization,
   type EscrowItemInput,
   type EscrowOrder,
-  PayPalApiError,
   type PayPalItemWire,
   PayPalOrderResponseSchema,
   type PayPalPurchaseUnitWire,
@@ -389,77 +386,11 @@ export class OrdersEscrowService {
     return { itemsWire, itemTotal };
   }
 
-  private async handleErrorResponse(res: Response, defaultMessage: string): Promise<never> {
-    const errorText = await res.text();
-    let parsed: Record<string, unknown> = {};
-    try {
-      parsed = JSON.parse(errorText) as Record<string, unknown>;
-    } catch {
-      parsed = { rawBody: errorText };
-    }
-
-    const errorName = typeof parsed.name === "string" ? parsed.name : undefined;
-    const debugId = typeof parsed.debug_id === "string" ? parsed.debug_id : undefined;
-
-    const detailsList = Array.isArray(parsed.details) ? parsed.details : [];
-    const detailsSummary = detailsList
-      .map((d: unknown) => {
-        if (typeof d === "object" && d !== null) {
-          const item = d as Record<string, unknown>;
-          const issue = typeof item.issue === "string" ? item.issue : "";
-          const desc = typeof item.description === "string" ? item.description : "";
-          if (issue && desc) return `${issue}: ${desc}`;
-          return issue || desc;
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("; ");
-
-    const baseMessage = typeof parsed.message === "string" ? parsed.message : defaultMessage;
-    const message = detailsSummary ? `${baseMessage} (${detailsSummary})` : baseMessage;
-
-    if (res.status === 401 || res.status === 403) {
-      throw new UnauthorizedError(message, {
-        httpStatus: res.status,
-        debugId,
-        errorName,
-        details: parsed,
-      });
-    }
-
-    if (res.status === 404) {
-      throw new NotFoundError(message, {
-        httpStatus: 404,
-        debugId,
-        errorName,
-        details: parsed,
-      });
-    }
-
-    if (res.status === 409) {
-      throw new ConflictError(message, {
-        httpStatus: 409,
-        debugId,
-        errorName,
-        details: parsed,
-      });
-    }
-
-    if (res.status === 422 || res.status === 400) {
-      throw new EscrowAuthorizationError(message, {
-        httpStatus: res.status,
-        debugId,
-        errorName,
-        details: parsed,
-      });
-    }
-
-    throw new PayPalApiError(message, {
-      httpStatus: res.status,
-      debugId,
-      paypalErrorName: errorName,
-      details: parsed,
-    });
+  private handleErrorResponse(res: Response, defaultMessage: string): Promise<never> {
+    return throwPayPalError(
+      res,
+      defaultMessage,
+      (msg, details) => new EscrowAuthorizationError(msg, details),
+    );
   }
 }
