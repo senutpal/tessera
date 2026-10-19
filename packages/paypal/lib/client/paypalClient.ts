@@ -10,6 +10,8 @@ import type {
   PayPalConfig,
   VoidAuthorizationOptions,
 } from "../types/orders.js";
+import type { PayPalVerifyWebhookSignatureRequest } from "../types/webhooks.js";
+import { PayPalVerifyWebhookSignatureResponseSchema } from "../types/webhooks.js";
 import { PayPalAuthClient } from "./paypalAuthClient.js";
 
 export class PayPalClient {
@@ -49,5 +51,33 @@ export class PayPalClient {
    */
   public async getOrder(orderId: string): Promise<EscrowOrder> {
     return this.orders.getOrder(orderId);
+  }
+
+  /**
+   * Verifies a webhook signature using PayPal's REST API endpoint:
+   * `POST /v1/notifications/verify-webhook-signature`
+   */
+  public async verifyWebhookSignature(
+    request: PayPalVerifyWebhookSignatureRequest,
+  ): Promise<boolean> {
+    const res = await this.auth.fetchAuthenticated("/v1/notifications/verify-webhook-signature", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+
+    if (!res.ok) {
+      return false;
+    }
+
+    const data = (await res.json()) as unknown;
+    const parsed = PayPalVerifyWebhookSignatureResponseSchema.safeParse(data);
+    if (!parsed.success) {
+      return false;
+    }
+
+    return parsed.data.verification_status === "SUCCESS";
   }
 }
