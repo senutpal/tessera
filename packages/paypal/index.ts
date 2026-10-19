@@ -61,6 +61,10 @@ import type {
 
 /**
  * High-level helper to create an escrow order with `intent: "AUTHORIZE"`.
+ *
+ * NOTE: Each call creates a new `PayPalClient` instance without a shared token cache.
+ * In production or high-throughput workflows, create and reuse a single long-lived `PayPalClient`
+ * to avoid requesting a new OAuth token on every call.
  */
 export async function createEscrowOrder(
   config: PayPalConfig,
@@ -72,6 +76,10 @@ export async function createEscrowOrder(
 
 /**
  * High-level helper to execute an authorization hold on an approved order.
+ *
+ * NOTE: Each call creates a new `PayPalClient` instance without a shared token cache.
+ * In production or high-throughput workflows, create and reuse a single long-lived `PayPalClient`
+ * to avoid requesting a new OAuth token on every call.
  */
 export async function authorizeOrder(
   config: PayPalConfig,
@@ -83,6 +91,10 @@ export async function authorizeOrder(
 
 /**
  * High-level helper to void an authorization hold and unlock buyer funds.
+ *
+ * NOTE: Each call creates a new `PayPalClient` instance without a shared token cache.
+ * In production or high-throughput workflows, create and reuse a single long-lived `PayPalClient`
+ * to avoid requesting a new OAuth token on every call.
  */
 export async function voidAuthorization(
   config: PayPalConfig,
