@@ -66,19 +66,20 @@ export class WebhookRouter {
       };
     }
 
-    // 1. Cryptographic Signature & Idempotency Verification
+    // 1. Cryptographic Signature Verification (without committing replay state yet)
     let verification: WebhookVerificationResult;
     try {
       verification = await this.verifier.verify({
         headers: request.headers,
         rawBody: request.rawBody,
         webhookId: request.webhookId ?? this.webhookId,
+        options: { checkReplay: false },
       });
     } catch (err) {
       return {
         status: "INVALID_SIGNATURE",
         httpStatus: 401,
-        message: `Webhook signature verification rejected: ${(err as Error).message}`,
+        message: (err as Error).message,
         error: (err as Error).message,
       };
     }
@@ -87,17 +88,19 @@ export class WebhookRouter {
       return {
         status: "INVALID_SIGNATURE",
         httpStatus: 401,
-        message: "Webhook signature verification failed",
+        message: verification.failureReason ?? "Webhook signature verification failed",
         transmissionId: verification.transmissionId,
         error: verification.failureReason ?? "Signature mismatch",
       };
     }
 
-    if (verification.isDuplicate) {
+    // Check transmission ID idempotency (already successfully processed)
+    const isDuplicateTx = await this.verifier.idempotencyStore.has(verification.transmissionId);
+    if (isDuplicateTx) {
       return {
         status: "DUPLICATE",
         httpStatus: 200,
-        message: "Duplicate transmission acknowledged and ignored",
+        message: `Duplicate transmission acknowledged and ignored: ${verification.transmissionId}`,
         transmissionId: verification.transmissionId,
       };
     }
@@ -151,6 +154,18 @@ export class WebhookRouter {
 
     const event = parseResult.data;
 
+    // Deduplicate by business event ID across differing transmission deliveries
+    const isDuplicateEvent = await this.verifier.idempotencyStore.has(`event:${event.id}`);
+    if (isDuplicateEvent) {
+      return {
+        status: "DUPLICATE",
+        httpStatus: 200,
+        message: `Duplicate webhook event ID acknowledged and ignored: ${event.id}`,
+        transmissionId: verification.transmissionId,
+        eventType: event.event_type,
+      };
+    }
+
     // 4. Transform & Dispatch by Event Type
     switch (event.event_type) {
       case "PAYMENT.AUTHORIZATION.CREATED": {
@@ -167,7 +182,12 @@ export class WebhookRouter {
             error: (err as Error).message,
           };
         }
-        return this.dispatchEvent(domainEvent, event.event_type, verification.transmissionId);
+        return this.dispatchEvent(
+          domainEvent,
+          event.event_type,
+          verification.transmissionId,
+          event.id,
+        );
       }
 
       case "PAYMENT.AUTHORIZATION.VOIDED": {
@@ -184,10 +204,17 @@ export class WebhookRouter {
             error: (err as Error).message,
           };
         }
-        return this.dispatchEvent(domainEvent, event.event_type, verification.transmissionId);
+        return this.dispatchEvent(
+          domainEvent,
+          event.event_type,
+          verification.transmissionId,
+          event.id,
+        );
       }
 
       default: {
+        await this.verifier.idempotencyStore.record(verification.transmissionId);
+        await this.verifier.idempotencyStore.record(`event:${event.id}`);
         return {
           status: "IGNORED",
           httpStatus: 200,
@@ -304,6 +331,7 @@ export class WebhookRouter {
     domainEvent: ClearinghouseWebhookEvent,
     eventType: string,
     transmissionId: string,
+    eventId: string,
   ): Promise<WebhookProcessingResult> {
     try {
       if (this.eventSink) {
@@ -317,6 +345,10 @@ export class WebhookRouter {
       for (const handler of allHandlers) {
         await handler(domainEvent);
       }
+
+      // Successful dispatch: commit transmission ID and event ID atomically
+      await this.verifier.idempotencyStore.record(transmissionId);
+      await this.verifier.idempotencyStore.record(`event:${eventId}`);
 
       return {
         status: "PROCESSED",
