@@ -288,5 +288,130 @@ describe("Autonomous Quote Optimizer", () => {
       expect(result.rejectedCount).toBe(1);
       expect(result.summary).toContain("No eligible quote found");
     });
+
+    it("throws Channel3ValidationError on fractional or non-safe integer budget amounts", () => {
+      const product = buildTestProduct("prod_budget_float", "Item", [
+        { domain: "bestbuy.com", cents: 5000, inStock: true, days: 2 },
+      ]);
+
+      expect(() =>
+        optimizeQuote([product], {
+          maxBudget: 25.5,
+        }),
+      ).toThrow(Channel3ValidationError);
+
+      expect(() =>
+        optimizeQuote([product], {
+          maxBudget: Number.MAX_SAFE_INTEGER + 10,
+        }),
+      ).toThrow(Channel3ValidationError);
+    });
+
+    it("evaluates numeric budget in mandate currency when currency is specified", () => {
+      const product: ProcurementProduct = {
+        id: "prod_eur",
+        title: "European Product",
+        offers: [
+          {
+            offerId: "prod_eur:fnac.fr",
+            merchantDomain: "fnac.fr",
+            productUrl: "https://fnac.fr/item",
+            price: Money.fromMinorUnits(45000, "EUR"), // €450.00
+            inStock: true,
+            shippingDurationIso: "P2D",
+            estimatedDeliveryDays: 2,
+          },
+          {
+            offerId: "prod_eur:amazon.de",
+            merchantDomain: "amazon.de",
+            productUrl: "https://amazon.de/item",
+            price: Money.fromMinorUnits(55000, "EUR"), // €550.00 (exceeds €500 budget)
+            inStock: true,
+            shippingDurationIso: "P2D",
+            estimatedDeliveryDays: 2,
+          },
+        ],
+      };
+
+      const result = optimizeQuote([product], {
+        mandate: {
+          maxBudget: 50000, // 50000 cents in EUR = €500.00
+          currency: "EUR",
+        },
+      });
+
+      expect(result.optimalQuote?.merchantDomain).toBe("fnac.fr");
+      expect(result.optimalQuote?.price.currency).toBe("EUR");
+      expect(result.optimalQuote?.price.toMinorUnits()).toBe(45000);
+      const amazonQuote = result.quotes.find((q) => q.merchantDomain === "amazon.de");
+      expect(amazonQuote?.status).toBe("EXCEEDS_BUDGET");
+    });
+
+    it("rejects all merchants when an empty whitelist is explicitly declared", () => {
+      const product = buildTestProduct("prod_whitelist", "Item", [
+        { domain: "bestbuy.com", cents: 5000, inStock: true, days: 2 },
+      ]);
+
+      const resultEmptyAllowed = optimizeQuote([product], {
+        allowedDomains: [],
+      });
+      expect(resultEmptyAllowed.optimalQuote).toBeNull();
+      expect(resultEmptyAllowed.rejectedCount).toBe(1);
+      expect(resultEmptyAllowed.quotes[0]?.status).toBe("DISALLOWED_MERCHANT");
+
+      const resultEmptyMandate = optimizeQuote([product], {
+        mandate: {
+          merchant_whitelist: [],
+        },
+      });
+      expect(resultEmptyMandate.optimalQuote).toBeNull();
+      expect(resultEmptyMandate.rejectedCount).toBe(1);
+      expect(resultEmptyMandate.quotes[0]?.status).toBe("DISALLOWED_MERCHANT");
+    });
+
+    it("generates distinct quoteIds for hyphenated vs dotted domains and multiple offers from same merchant", () => {
+      const product: ProcurementProduct = {
+        id: "prod_distinct",
+        title: "Distinct Quotes Test",
+        offers: [
+          {
+            offerId: "prod_distinct:a-b.com:0",
+            merchantDomain: "a-b.com",
+            productUrl: "https://a-b.com/item",
+            price: Money.fromMinorUnits(5000, "USD"),
+            inStock: true,
+            shippingDurationIso: "P2D",
+            estimatedDeliveryDays: 2,
+          },
+          {
+            offerId: "prod_distinct:a.b.com:1",
+            merchantDomain: "a.b.com",
+            productUrl: "https://a.b.com/item",
+            price: Money.fromMinorUnits(6000, "USD"),
+            inStock: true,
+            shippingDurationIso: "P2D",
+            estimatedDeliveryDays: 2,
+          },
+          {
+            offerId: "prod_distinct:a.b.com:refurbished:2",
+            merchantDomain: "a.b.com",
+            productUrl: "https://a.b.com/item-refurb",
+            price: Money.fromMinorUnits(4000, "USD"),
+            condition: "refurbished",
+            inStock: true,
+            shippingDurationIso: "P2D",
+            estimatedDeliveryDays: 2,
+          },
+        ],
+      };
+
+      const result = optimizeQuote([product], {});
+      const quoteIds = result.quotes.map((q) => q.quoteId);
+      const uniqueQuoteIds = new Set(quoteIds);
+      expect(uniqueQuoteIds.size).toBe(quoteIds.length);
+      expect(quoteIds).toContain("quote_prod_distinct_a-b_com_0");
+      expect(quoteIds).toContain("quote_prod_distinct_a_b_com_1");
+      expect(quoteIds).toContain("quote_prod_distinct_a_b_com_refurbished_2");
+    });
   });
 });
