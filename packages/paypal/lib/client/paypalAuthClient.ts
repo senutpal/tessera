@@ -185,21 +185,24 @@ export class PayPalAuthClient {
 
   private async executeFetch(url: string, init: RequestInit = {}): Promise<Response> {
     const controller = new AbortController();
+    let timedOut = false;
     const timeout = setTimeout(() => {
+      timedOut = true;
       controller.abort();
     }, this.timeoutMs);
 
     const signal: AbortSignal = controller.signal;
+    const onOuterAbort = () => {
+      clearTimeout(timeout);
+      controller.abort();
+    };
+
     if (init.signal) {
       const outerSignal = init.signal;
       if (outerSignal.aborted) {
-        clearTimeout(timeout);
-        controller.abort();
+        onOuterAbort();
       } else {
-        outerSignal.addEventListener("abort", () => {
-          clearTimeout(timeout);
-          controller.abort();
-        });
+        outerSignal.addEventListener("abort", onOuterAbort, { once: true });
       }
     }
 
@@ -211,8 +214,9 @@ export class PayPalAuthClient {
       return response;
     } catch (err: unknown) {
       if (
-        (err instanceof DOMException && err.name === "AbortError") ||
-        (err as Error)?.name === "AbortError"
+        timedOut &&
+        ((err instanceof DOMException && err.name === "AbortError") ||
+          (err as Error)?.name === "AbortError")
       ) {
         throw new PayPalTimeoutError(
           `PayPal request to ${url} timed out after ${this.timeoutMs}ms`,
@@ -222,6 +226,9 @@ export class PayPalAuthClient {
       throw err;
     } finally {
       clearTimeout(timeout);
+      if (init.signal) {
+        init.signal.removeEventListener("abort", onOuterAbort);
+      }
     }
   }
 }
