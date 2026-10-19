@@ -290,6 +290,46 @@ describe("WebhookRouter", () => {
       expect(res2.message).toContain("Duplicate transmission acknowledged and ignored");
       expect(mockEventSink.emit).toHaveBeenCalledTimes(1); // Not called again!
     });
+
+    it("deduplicates repeated deliveries by event ID even when transmission ID differs", async () => {
+      const verifier = createMockVerifier();
+      const mockEventSink: WebhookEventSink = {
+        emit: vi.fn(),
+      };
+
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+        eventSink: mockEventSink,
+      });
+
+      const payload = {
+        id: "WH-EVT-SAME-ID",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: { id: "AUTH-123" },
+      };
+
+      const req1 = createSignedWebhookRequest({
+        rawBody: JSON.stringify(payload),
+        transmissionId: "tx-first-transmission",
+      });
+
+      const res1 = await router.handleWebhook(req1);
+      expect(res1.status).toBe("PROCESSED");
+      expect(mockEventSink.emit).toHaveBeenCalledTimes(1);
+
+      // Second delivery: completely different transmission ID, but same payload event.id
+      const req2 = createSignedWebhookRequest({
+        rawBody: JSON.stringify(payload),
+        transmissionId: "tx-second-transmission-diff",
+      });
+
+      const res2 = await router.handleWebhook(req2);
+      expect(res2.status).toBe("DUPLICATE");
+      expect(res2.httpStatus).toBe(200);
+      expect(res2.message).toContain("Duplicate webhook event ID acknowledged and ignored");
+      expect(mockEventSink.emit).toHaveBeenCalledTimes(1); // Did not dispatch twice!
+    });
   });
 
   describe("Security & Validation Rejections", () => {
@@ -467,6 +507,51 @@ describe("WebhookRouter", () => {
       expect(result.status).toBe("DISPATCH_ERROR");
       expect(result.httpStatus).toBe(500);
       expect(result.error).toContain("Database connection lost");
+    });
+
+    it("allows retry of webhook after previous delivery failed with DISPATCH_ERROR", async () => {
+      const verifier = createMockVerifier();
+      let callCount = 0;
+      const transientSink: WebhookEventSink = {
+        emit: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount === 1) {
+            throw new Error("Temporary DB timeout");
+          }
+        }),
+      };
+
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+        eventSink: transientSink,
+      });
+
+      const payload = {
+        id: "WH-EVT-RETRYABLE",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: { id: "AUTH-RETRY" },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+
+      // First attempt fails with 500
+      const res1 = await router.handleWebhook(req);
+      expect(res1.status).toBe("DISPATCH_ERROR");
+      expect(res1.httpStatus).toBe(500);
+      expect(transientSink.emit).toHaveBeenCalledTimes(1);
+
+      // Retry delivery with same transmission ID must NOT be prematurely blocked as DUPLICATE
+      const res2 = await router.handleWebhook(req);
+      expect(res2.status).toBe("PROCESSED");
+      expect(res2.httpStatus).toBe(200);
+      expect(transientSink.emit).toHaveBeenCalledTimes(2);
+
+      // Third delivery after success is correctly identified as DUPLICATE
+      const res3 = await router.handleWebhook(req);
+      expect(res3.status).toBe("DUPLICATE");
+      expect(res3.httpStatus).toBe(200);
+      expect(transientSink.emit).toHaveBeenCalledTimes(2); // Not emitted again!
     });
   });
 
