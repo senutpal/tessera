@@ -143,7 +143,8 @@ export type QuoteEvaluationStatus =
   | "DISALLOWED_MERCHANT"
   | "SLA_BREACH"
   | "OUT_OF_STOCK"
-  | "CURRENCY_MISMATCH";
+  | "CURRENCY_MISMATCH"
+  | "DISALLOWED_CONDITION";
 
 export interface ProcurementQuote {
   quoteId: string;
@@ -174,6 +175,7 @@ export interface MandateQuoteConstraints {
   maxDeliveryDays?: number | undefined;
   preferredMerchants?: readonly string[] | undefined;
   requireInStock?: boolean | undefined;
+  allowedConditions?: readonly string[] | undefined;
 }
 
 export interface QuoteOptimizationResult {

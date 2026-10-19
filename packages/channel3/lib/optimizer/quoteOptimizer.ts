@@ -22,13 +22,27 @@ function cleanDomainPattern(pattern: string): string {
   if (cleaned === "*" || cleaned === "all") {
     return "*";
   }
-  if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) {
-    try {
-      cleaned = new URL(cleaned).hostname;
-    } catch {
-      cleaned = cleaned.replace(/^https?:\/\//, "");
-    }
+
+  let isWildcardPrefix = false;
+  if (cleaned.startsWith("*.")) {
+    isWildcardPrefix = true;
+    cleaned = cleaned.slice(2);
   }
+
+  const urlCandidate =
+    cleaned.startsWith("http://") || cleaned.startsWith("https://")
+      ? cleaned
+      : `https://${cleaned}`;
+
+  try {
+    const parsed = new URL(urlCandidate);
+    if (parsed.hostname) {
+      cleaned = parsed.hostname;
+    }
+  } catch {
+    cleaned = cleaned.replace(/^https?:\/\//, "");
+  }
+
   const slashIdx = cleaned.indexOf("/");
   if (slashIdx !== -1) {
     cleaned = cleaned.slice(0, slashIdx);
@@ -48,7 +62,9 @@ function cleanDomainPattern(pattern: string): string {
   if (cleaned.startsWith("www.")) {
     cleaned = cleaned.slice(4);
   }
-  return cleaned;
+  cleaned = cleaned.replace(/\.+$/, "");
+
+  return isWildcardPrefix ? `*.${cleaned}` : cleaned;
 }
 
 /**
@@ -150,10 +166,20 @@ export function normalizeConstraints(
       ? (constraints.mandate as Record<string, unknown>)
       : constraints;
 
-  const declaredCurrency =
-    "currency" in rawMandate && typeof rawMandate.currency === "string"
-      ? rawMandate.currency
+  const paymentParams =
+    "payment_parameters" in rawMandate &&
+    rawMandate.payment_parameters &&
+    typeof rawMandate.payment_parameters === "object"
+      ? (rawMandate.payment_parameters as Record<string, unknown>)
       : undefined;
+
+  const declaredCurrency =
+    ("currency" in rawMandate && typeof rawMandate.currency === "string"
+      ? rawMandate.currency
+      : undefined) ??
+    (paymentParams && "currency" in paymentParams && typeof paymentParams.currency === "string"
+      ? paymentParams.currency
+      : undefined);
   const budgetCurrency = declaredCurrency ?? "USD";
 
   let maxBudget: Money | undefined;
@@ -163,16 +189,11 @@ export function normalizeConstraints(
     maxBudget = parseBudgetConstraint(rawMandate.max_amount, budgetCurrency);
   } else if ("payment_amount" in rawMandate && rawMandate.payment_amount != null) {
     maxBudget = parseBudgetConstraint(rawMandate.payment_amount, budgetCurrency);
-  } else if (
-    "payment_parameters" in rawMandate &&
-    rawMandate.payment_parameters &&
-    typeof rawMandate.payment_parameters === "object"
-  ) {
-    const params = rawMandate.payment_parameters as Record<string, unknown>;
-    if (params.maximum_amount != null) {
-      maxBudget = parseBudgetConstraint(params.maximum_amount, budgetCurrency);
-    } else if (params.max_amount != null) {
-      maxBudget = parseBudgetConstraint(params.max_amount, budgetCurrency);
+  } else if (paymentParams) {
+    if (paymentParams.maximum_amount != null) {
+      maxBudget = parseBudgetConstraint(paymentParams.maximum_amount, budgetCurrency);
+    } else if (paymentParams.max_amount != null) {
+      maxBudget = parseBudgetConstraint(paymentParams.max_amount, budgetCurrency);
     }
   }
 
@@ -191,10 +212,12 @@ export function normalizeConstraints(
     whitelistDeclared = true;
     const payeeObj = rawMandate.payee as Record<string, unknown>;
     if (typeof payeeObj.domain === "string") {
-      allowedDomains.push(cleanDomainPattern(payeeObj.domain));
+      const cleaned = cleanDomainPattern(payeeObj.domain);
+      if (cleaned) allowedDomains.push(cleaned);
     }
     if (typeof payeeObj.website === "string") {
-      allowedDomains.push(cleanDomainPattern(payeeObj.website));
+      const cleaned = cleanDomainPattern(payeeObj.website);
+      if (cleaned) allowedDomains.push(cleaned);
     }
   }
 
@@ -225,6 +248,23 @@ export function normalizeConstraints(
       ? rawMandate.requireInStock
       : true;
 
+  const allowedConditions: string[] = [];
+  if ("allowedConditions" in rawMandate && Array.isArray(rawMandate.allowedConditions)) {
+    allowedConditions.push(
+      ...rawMandate.allowedConditions.map((c) => String(c).trim().toLowerCase()).filter(Boolean),
+    );
+  } else if ("allowed_conditions" in rawMandate && Array.isArray(rawMandate.allowed_conditions)) {
+    allowedConditions.push(
+      ...rawMandate.allowed_conditions.map((c) => String(c).trim().toLowerCase()).filter(Boolean),
+    );
+  } else if (
+    "condition" in rawMandate &&
+    typeof rawMandate.condition === "string" &&
+    rawMandate.condition.trim()
+  ) {
+    allowedConditions.push(rawMandate.condition.trim().toLowerCase());
+  }
+
   const currency = declaredCurrency ?? maxBudget?.currency;
 
   return {
@@ -234,6 +274,7 @@ export function normalizeConstraints(
     maxDeliveryDays,
     preferredMerchants: preferredMerchants.length > 0 ? preferredMerchants : undefined,
     requireInStock,
+    allowedConditions: allowedConditions.length > 0 ? allowedConditions : undefined,
   };
 }
 
@@ -265,6 +306,24 @@ export function optimizeQuote(
       if (status === "ELIGIBLE" && constraints.requireInStock !== false && !offer.inStock) {
         status = "OUT_OF_STOCK";
         rejectionReasons.push("Product offer is currently out of stock");
+      }
+
+      // 1b. Condition constraint (e.g. restrict to new or refurbished items)
+      if (
+        status === "ELIGIBLE" &&
+        constraints.allowedConditions &&
+        constraints.allowedConditions.length > 0
+      ) {
+        const offerCondition = offer.condition?.toLowerCase() ?? "new";
+        const isConditionAllowed = constraints.allowedConditions.some(
+          (c) => c.toLowerCase() === offerCondition,
+        );
+        if (!isConditionAllowed) {
+          status = "DISALLOWED_CONDITION";
+          rejectionReasons.push(
+            `Offer condition "${offer.condition ?? "unspecified"}" does not match allowed conditions [${constraints.allowedConditions.join(", ")}]`,
+          );
+        }
       }
 
       // 2. Merchant reputation / whitelist constraint

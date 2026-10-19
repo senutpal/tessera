@@ -60,6 +60,13 @@ describe("Autonomous Quote Optimizer", () => {
       expect(isDomainWhitelisted("nike.com", ["www.nike.com"])).toBe(true);
       expect(isDomainWhitelisted("https://www.nike.com/shoes", ["nike.com"])).toBe(true);
     });
+
+    it("normalizes internationalized domain names (IDN) in whitelist matching", () => {
+      expect(isDomainWhitelisted("bücher.de", ["bücher.de"])).toBe(true);
+      expect(isDomainWhitelisted("shop.bücher.de", ["*.bücher.de"])).toBe(true);
+      expect(isDomainWhitelisted("https://www.bücher.de/katalog", ["bücher.de"])).toBe(true);
+      expect(isDomainWhitelisted("bücher.de", ["https://bücher.de"])).toBe(true);
+    });
   });
 
   describe("optimizeQuote vendor selection", () => {
@@ -412,6 +419,93 @@ describe("Autonomous Quote Optimizer", () => {
       expect(quoteIds).toContain("quote_prod_distinct_a-b_com_0");
       expect(quoteIds).toContain("quote_prod_distinct_a_b_com_1");
       expect(quoteIds).toContain("quote_prod_distinct_a_b_com_refurbished_2");
+    });
+
+    it("treats payee with empty domain as an empty whitelist, rejecting all offers", () => {
+      const product = buildTestProduct("prod_payee_empty", "Item", [
+        { domain: "bestbuy.com", cents: 5000, inStock: true, days: 2 },
+      ]);
+
+      const result = optimizeQuote([product], {
+        mandate: {
+          payee: { domain: "" },
+        },
+      });
+
+      expect(result.optimalQuote).toBeNull();
+      expect(result.rejectedCount).toBe(1);
+      expect(result.quotes[0]?.status).toBe("DISALLOWED_MERCHANT");
+    });
+
+    it("respects currency declared inside payment_parameters for numeric budget caps", () => {
+      const product: ProcurementProduct = {
+        id: "prod_eur_params",
+        title: "EUR Params Item",
+        offers: [
+          {
+            offerId: "prod_eur_params:otto.de",
+            merchantDomain: "otto.de",
+            productUrl: "https://otto.de/item",
+            price: Money.fromMinorUnits(30000, "EUR"),
+            inStock: true,
+            shippingDurationIso: "P2D",
+            estimatedDeliveryDays: 2,
+          },
+        ],
+      };
+
+      const result = optimizeQuote([product], {
+        mandate: {
+          payment_parameters: {
+            max_amount: 40000,
+            currency: "EUR",
+          },
+        },
+      });
+
+      expect(result.optimalQuote).not.toBeNull();
+      expect(result.optimalQuote?.merchantDomain).toBe("otto.de");
+      expect(result.optimalQuote?.price.currency).toBe("EUR");
+    });
+
+    it("evaluates allowedConditions constraint and rejects refurbished items when new is required", () => {
+      const product: ProcurementProduct = {
+        id: "prod_condition",
+        title: "Smartphone",
+        offers: [
+          {
+            offerId: "prod_condition:refurb.com:refurbished:0",
+            merchantDomain: "refurb.com",
+            productUrl: "https://refurb.com/item",
+            price: Money.fromMinorUnits(29900, "USD"), // Cheaper, but refurbished
+            condition: "refurbished",
+            inStock: true,
+            shippingDurationIso: "P2D",
+            estimatedDeliveryDays: 2,
+          },
+          {
+            offerId: "prod_condition:apple.com:new:1",
+            merchantDomain: "apple.com",
+            productUrl: "https://apple.com/item",
+            price: Money.fromMinorUnits(39900, "USD"), // More expensive, but new
+            condition: "new",
+            inStock: true,
+            shippingDurationIso: "P2D",
+            estimatedDeliveryDays: 2,
+          },
+        ],
+      };
+
+      const result = optimizeQuote([product], {
+        allowedConditions: ["new"],
+      });
+
+      expect(result.optimalQuote?.merchantDomain).toBe("apple.com");
+      expect(result.optimalQuote?.condition).toBe("new");
+
+      const refurbQuote = result.quotes.find((q) => q.merchantDomain === "refurb.com");
+      expect(refurbQuote?.status).toBe("DISALLOWED_CONDITION");
+      expect(refurbQuote?.rejectionReasons[0]).toContain("does not match allowed conditions");
     });
   });
 });
