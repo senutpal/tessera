@@ -86,10 +86,13 @@ export function parseBudgetConstraint(val: unknown, currency = "USD"): Money {
     if (val < 0) {
       throw new Channel3ValidationError(`Budget cannot be negative: ${val}`);
     }
-    if (Number.isInteger(val)) {
-      return Money.fromMinorUnits(val, currency);
+    if (!Number.isSafeInteger(val)) {
+      throw new Channel3ValidationError(
+        `Numeric budgets must be integer minor units; received ${val}. Use a decimal string for major units.`,
+        { val },
+      );
     }
-    return Money.fromDecimalString(val.toString(), currency);
+    return Money.fromMinorUnits(val, currency);
   }
 
   if (typeof val === "string") {
@@ -147,13 +150,19 @@ export function normalizeConstraints(
       ? (constraints.mandate as Record<string, unknown>)
       : constraints;
 
+  const declaredCurrency =
+    "currency" in rawMandate && typeof rawMandate.currency === "string"
+      ? rawMandate.currency
+      : undefined;
+  const budgetCurrency = declaredCurrency ?? "USD";
+
   let maxBudget: Money | undefined;
   if ("maxBudget" in rawMandate && rawMandate.maxBudget != null) {
-    maxBudget = parseBudgetConstraint(rawMandate.maxBudget);
+    maxBudget = parseBudgetConstraint(rawMandate.maxBudget, budgetCurrency);
   } else if ("max_amount" in rawMandate && rawMandate.max_amount != null) {
-    maxBudget = parseBudgetConstraint(rawMandate.max_amount);
+    maxBudget = parseBudgetConstraint(rawMandate.max_amount, budgetCurrency);
   } else if ("payment_amount" in rawMandate && rawMandate.payment_amount != null) {
-    maxBudget = parseBudgetConstraint(rawMandate.payment_amount);
+    maxBudget = parseBudgetConstraint(rawMandate.payment_amount, budgetCurrency);
   } else if (
     "payment_parameters" in rawMandate &&
     rawMandate.payment_parameters &&
@@ -161,20 +170,25 @@ export function normalizeConstraints(
   ) {
     const params = rawMandate.payment_parameters as Record<string, unknown>;
     if (params.maximum_amount != null) {
-      maxBudget = parseBudgetConstraint(params.maximum_amount);
+      maxBudget = parseBudgetConstraint(params.maximum_amount, budgetCurrency);
     } else if (params.max_amount != null) {
-      maxBudget = parseBudgetConstraint(params.max_amount);
+      maxBudget = parseBudgetConstraint(params.max_amount, budgetCurrency);
     }
   }
 
+  let whitelistDeclared = false;
   const allowedDomains: string[] = [];
   if ("allowedDomains" in rawMandate && Array.isArray(rawMandate.allowedDomains)) {
+    whitelistDeclared = true;
     allowedDomains.push(...rawMandate.allowedDomains.map(cleanDomainPattern).filter(Boolean));
   } else if ("merchant_whitelist" in rawMandate && Array.isArray(rawMandate.merchant_whitelist)) {
+    whitelistDeclared = true;
     allowedDomains.push(...rawMandate.merchant_whitelist.map(cleanDomainPattern).filter(Boolean));
   } else if ("allowed_merchants" in rawMandate && Array.isArray(rawMandate.allowed_merchants)) {
+    whitelistDeclared = true;
     allowedDomains.push(...rawMandate.allowed_merchants.map(cleanDomainPattern).filter(Boolean));
   } else if ("payee" in rawMandate && rawMandate.payee && typeof rawMandate.payee === "object") {
+    whitelistDeclared = true;
     const payeeObj = rawMandate.payee as Record<string, unknown>;
     if (typeof payeeObj.domain === "string") {
       allowedDomains.push(cleanDomainPattern(payeeObj.domain));
@@ -211,15 +225,12 @@ export function normalizeConstraints(
       ? rawMandate.requireInStock
       : true;
 
-  const currency =
-    "currency" in rawMandate && typeof rawMandate.currency === "string"
-      ? rawMandate.currency
-      : maxBudget?.currency;
+  const currency = declaredCurrency ?? maxBudget?.currency;
 
   return {
     maxBudget,
     currency,
-    allowedDomains: allowedDomains.length > 0 ? allowedDomains : undefined,
+    allowedDomains: whitelistDeclared ? allowedDomains : undefined,
     maxDeliveryDays,
     preferredMerchants: preferredMerchants.length > 0 ? preferredMerchants : undefined,
     requireInStock,
@@ -240,7 +251,7 @@ export function optimizeQuote(
   const candidateQuotes: ProcurementQuote[] = [];
 
   for (const product of products) {
-    for (const offer of product.offers) {
+    for (const [offerIndex, offer] of product.offers.entries()) {
       const rejectionReasons: string[] = [];
       let status: QuoteEvaluationStatus = "ELIGIBLE";
 
@@ -257,11 +268,7 @@ export function optimizeQuote(
       }
 
       // 2. Merchant reputation / whitelist constraint
-      if (
-        status === "ELIGIBLE" &&
-        constraints.allowedDomains &&
-        constraints.allowedDomains.length > 0
-      ) {
+      if (status === "ELIGIBLE" && constraints.allowedDomains !== undefined) {
         const isWhitelisted = isDomainWhitelisted(offer.merchantDomain, constraints.allowedDomains);
         if (!isWhitelisted) {
           status = "DISALLOWED_MERCHANT";
@@ -310,10 +317,15 @@ export function optimizeQuote(
         }
       }
 
-      const quoteId = `quote_${product.id}_${offer.merchantDomain.replace(/[^a-z0-9]/g, "_")}`;
+      const sanitizedDomain = offer.merchantDomain.replace(/\./g, "_").replace(/[^a-z0-9_-]/g, "");
+      const conditionSuffix = offer.condition
+        ? `_${offer.condition.replace(/[^a-z0-9]/gi, "_")}`
+        : "";
+      const quoteId = `quote_${product.id}_${sanitizedDomain}${conditionSuffix}_${offerIndex}`;
 
       candidateQuotes.push({
         quoteId,
+        offerId: offer.offerId,
         productId: product.id,
         productTitle: product.title,
         brand: product.brand,
@@ -324,6 +336,7 @@ export function optimizeQuote(
         estimatedDeliveryDays: offer.estimatedDeliveryDays,
         shippingDurationIso: offer.shippingDurationIso,
         inStock: offer.inStock,
+        condition: offer.condition,
         status,
         rejectionReasons,
         rank: 0,
