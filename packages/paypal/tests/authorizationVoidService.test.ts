@@ -101,6 +101,8 @@ describe("AuthorizationVoidService (Escrow Release/Void Engine)", () => {
 
     expect(result.authorizationId).toBe("0VF52814937998046");
     expect(result.status).toBe("VOIDED");
+    expect(result.requestId).toBe("void-req-123");
+    expect(result.eventEmitError).toBeUndefined();
     expect(result.reason).toBe("Mandate budget exceeded");
 
     // Confirms event dispatch
@@ -298,11 +300,11 @@ describe("AuthorizationVoidService (Escrow Release/Void Engine)", () => {
     });
     const voidService = new AuthorizationVoidService(auth);
 
-    await voidService.voidAuthorization({ authorizationId: "AUTH-AUTO-ID" });
+    const result = await voidService.voidAuthorization({ authorizationId: "AUTH-AUTO-ID" });
 
-    expect(capturedHeaders?.get("PayPal-Request-Id")).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-    );
+    const expectedId = capturedHeaders?.get("PayPal-Request-Id");
+    expect(expectedId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    expect(result.requestId).toBe(expectedId);
     expect(capturedHeaders?.get("Content-Type")).toBeNull();
     expect(capturedBody).toBeUndefined();
   });
@@ -411,5 +413,43 @@ describe("AuthorizationVoidService (Escrow Release/Void Engine)", () => {
     ).rejects.toThrow(
       /PREVIOUSLY_CAPTURED: Authorization has been previously captured and cannot be voided\./,
     );
+  });
+
+  it("returns successful void result with eventEmitError when eventSink throws", async () => {
+    const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+      }
+      return new Response(JSON.stringify(createMockVoidResponse()), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    const failingEventSink: EscrowEventSink = {
+      emit: vi.fn(() => {
+        throw new Error("Kafka broker connection timeout");
+      }),
+    };
+
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+    const voidService = new AuthorizationVoidService(auth, {
+      eventSink: failingEventSink,
+    });
+
+    const result = await voidService.voidAuthorization({
+      authorizationId: "0VF52814937998046",
+      requestId: "void-req-event-err",
+    });
+
+    expect(result.status).toBe("VOIDED");
+    expect(result.authorizationId).toBe("0VF52814937998046");
+    expect(result.requestId).toBe("void-req-event-err");
+    expect(result.eventEmitError).toBe("Kafka broker connection timeout");
   });
 });

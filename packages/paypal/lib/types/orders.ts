@@ -280,9 +280,11 @@ export interface EscrowVoidResult {
   authorizationId: AuthorizationId;
   status: "VOIDED";
   voidedAt: string;
+  requestId?: string | undefined;
   amount?: Money | undefined;
   reason?: string | undefined;
   rawResponse?: Record<string, unknown> | undefined;
+  eventEmitError?: string | undefined;
 }
 
 export interface EscrowHoldVoidedEvent {

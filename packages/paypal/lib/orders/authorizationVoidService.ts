@@ -89,6 +89,7 @@ export class AuthorizationVoidService {
       authorizationId: asAuthorizationId(authIdStr),
       status: "VOIDED",
       voidedAt,
+      requestId,
     };
 
     if (voidedAmount) {
@@ -117,7 +118,12 @@ export class AuthorizationVoidService {
         event.reason = options.reason;
       }
 
-      await this.eventSink.emit(event);
+      try {
+        await this.eventSink.emit(event);
+      } catch (emitErr: unknown) {
+        // Void already succeeded at PayPal; do not report it as a failed void.
+        result.eventEmitError = emitErr instanceof Error ? emitErr.message : String(emitErr);
+      }
     }
 
     return result;
