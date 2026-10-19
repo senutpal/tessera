@@ -204,26 +204,30 @@ export class WebhookRouter {
     transmissionId: string,
   ): ClearinghouseAuthorizationCreatedEvent {
     const resource = event.resource;
-    const authIdStr = String(resource.id ?? "");
-    const authorizationId = asAuthorizationId(authIdStr);
+    const rawAuthId = typeof resource.id === "string" ? resource.id.trim() : "";
+    if (!rawAuthId) {
+      throw new Error("Missing or empty required resource.id in authorization webhook");
+    }
+    const authorizationId = asAuthorizationId(rawAuthId);
 
     const relatedIds = (resource.supplementary_data as Record<string, unknown> | undefined)
       ?.related_ids as Record<string, unknown> | undefined;
     const orderIdStr = relatedIds?.order_id
-      ? String(relatedIds.order_id)
+      ? String(relatedIds.order_id).trim()
       : resource.order_id
-        ? String(resource.order_id)
-        : resource.custom_id
-          ? String(resource.custom_id)
-          : undefined;
+        ? String(resource.order_id).trim()
+        : undefined;
 
+    const customId = resource.custom_id ? String(resource.custom_id).trim() : undefined;
+    const parentPayment = resource.parent_payment
+      ? String(resource.parent_payment).trim()
+      : undefined;
     const amount = this.extractMoney(resource.amount);
     const status = String(resource.status ?? resource.state ?? "CREATED");
     const createTime = String(
       resource.create_time ?? event.create_time ?? new Date().toISOString(),
     );
     const expirationTime = resource.expiration_time ? String(resource.expiration_time) : undefined;
-    const parentPayment = resource.parent_payment ? String(resource.parent_payment) : undefined;
 
     return {
       type: "PAYMENT.AUTHORIZATION.CREATED",
@@ -234,6 +238,7 @@ export class WebhookRouter {
       createTime,
       expirationTime,
       parentPayment,
+      customId,
       rawResource: resource,
       transmissionId,
       timestamp: event.create_time ?? new Date().toISOString(),
@@ -245,19 +250,24 @@ export class WebhookRouter {
     transmissionId: string,
   ): ClearinghouseAuthorizationVoidedEvent {
     const resource = event.resource;
-    const authIdStr = String(resource.id ?? "");
-    const authorizationId = asAuthorizationId(authIdStr);
+    const rawAuthId = typeof resource.id === "string" ? resource.id.trim() : "";
+    if (!rawAuthId) {
+      throw new Error("Missing or empty required resource.id in authorization void webhook");
+    }
+    const authorizationId = asAuthorizationId(rawAuthId);
 
     const relatedIds = (resource.supplementary_data as Record<string, unknown> | undefined)
       ?.related_ids as Record<string, unknown> | undefined;
     const orderIdStr = relatedIds?.order_id
-      ? String(relatedIds.order_id)
+      ? String(relatedIds.order_id).trim()
       : resource.order_id
-        ? String(resource.order_id)
-        : resource.custom_id
-          ? String(resource.custom_id)
-          : undefined;
+        ? String(resource.order_id).trim()
+        : undefined;
 
+    const customId = resource.custom_id ? String(resource.custom_id).trim() : undefined;
+    const parentPayment = resource.parent_payment
+      ? String(resource.parent_payment).trim()
+      : undefined;
     const amount = resource.amount ? this.extractMoney(resource.amount) : undefined;
     const statusDetails = resource.status_details as Record<string, unknown> | undefined;
     const reason = statusDetails?.reason ? String(statusDetails.reason) : undefined;
@@ -271,6 +281,8 @@ export class WebhookRouter {
       reason,
       status: "VOIDED",
       updateTime,
+      parentPayment,
+      customId,
       rawResource: resource,
       transmissionId,
       timestamp: event.create_time ?? new Date().toISOString(),

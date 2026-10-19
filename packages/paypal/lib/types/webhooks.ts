@@ -65,6 +65,7 @@ export interface ClearinghouseAuthorizationCreatedEvent {
   createTime: string;
   expirationTime?: string | undefined;
   parentPayment?: string | undefined;
+  customId?: string | undefined;
   rawResource: Record<string, unknown>;
   transmissionId: string;
   timestamp: string;
@@ -78,6 +79,8 @@ export interface ClearinghouseAuthorizationVoidedEvent {
   reason?: string | undefined;
   status: "VOIDED";
   updateTime?: string | undefined;
+  parentPayment?: string | undefined;
+  customId?: string | undefined;
   rawResource: Record<string, unknown>;
   transmissionId: string;
   timestamp: string;
