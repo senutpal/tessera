@@ -4,7 +4,10 @@ import {
   type ClearinghouseAuthorizationCreatedEvent,
   type ClearinghouseAuthorizationVoidedEvent,
   type ClearinghouseWebhookEvent,
+  getDefaultWebhookVerifier,
+  resetDefaultWebhookVerifier,
   routeWebhook,
+  verifyWebhookSignature,
   type WebhookEventSink,
   WebhookRouter,
   WebhookSignatureVerifier,
@@ -574,6 +577,56 @@ describe("WebhookRouter", () => {
       expect(result.status).toBe("PROCESSED");
       expect(result.httpStatus).toBe(200);
       expect(result.eventType).toBe("PAYMENT.AUTHORIZATION.VOIDED");
+    });
+
+    it("reuses default verifier and detects duplicate transmissions across repeated routeWebhook calls", async () => {
+      resetDefaultWebhookVerifier();
+      const defaultVerifier = getDefaultWebhookVerifier();
+      vi.spyOn(defaultVerifier.certificateManager, "getCertificate").mockResolvedValue(
+        TEST_CERT_PEM,
+      );
+
+      const payload = {
+        id: "WH-EVT-SHARED-ROUTE",
+        event_type: "PAYMENT.AUTHORIZATION.VOIDED",
+        resource: { id: "AUTH-SHARED-VOID" },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+
+      // First call processes using default verifier
+      const res1 = await routeWebhook(req, { webhookId: TEST_WEBHOOK_ID });
+      expect(res1.status).toBe("PROCESSED");
+
+      // Second call reuses default verifier and its idempotency store
+      const res2 = await routeWebhook(req, { webhookId: TEST_WEBHOOK_ID });
+      expect(res2.status).toBe("DUPLICATE");
+      expect(res2.httpStatus).toBe(200);
+
+      resetDefaultWebhookVerifier();
+    });
+
+    it("reuses shared idempotencyStore when verifyWebhookSignature is called repeatedly with custom config", async () => {
+      resetDefaultWebhookVerifier();
+      const defaultVerifier = getDefaultWebhookVerifier();
+      vi.spyOn(defaultVerifier.certificateManager, "getCertificate").mockResolvedValue(
+        TEST_CERT_PEM,
+      );
+
+      const payload = { test: "shared_store" };
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+
+      // First call with custom config (no explicit idempotencyStore)
+      const res1 = await verifyWebhookSignature(req, { defaultWebhookId: TEST_WEBHOOK_ID });
+      expect(res1.isValid).toBe(true);
+      expect(res1.isDuplicate).toBe(false);
+
+      // Second call with different config object must still detect duplicate transmission
+      const res2 = await verifyWebhookSignature(req, { defaultWebhookId: TEST_WEBHOOK_ID });
+      expect(res2.isValid).toBe(true);
+      expect(res2.isDuplicate).toBe(true);
+
+      resetDefaultWebhookVerifier();
     });
   });
 });

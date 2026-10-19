@@ -166,24 +166,60 @@ export async function voidAuthorization(
   return client.voidAuthorization(options);
 }
 
+let defaultVerifier: WebhookSignatureVerifier | undefined;
+
+/**
+ * Returns the module-level shared WebhookSignatureVerifier instance.
+ * Reuses the certificate cache and replay protection idempotency store across invocations.
+ */
+export function getDefaultWebhookVerifier(): WebhookSignatureVerifier {
+  if (!defaultVerifier) {
+    defaultVerifier = new WebhookSignatureVerifier();
+  }
+  return defaultVerifier;
+}
+
+/**
+ * Resets the shared WebhookSignatureVerifier instance (useful for test isolation).
+ */
+export function resetDefaultWebhookVerifier(): void {
+  defaultVerifier = undefined;
+}
+
 /**
  * Verifies a PayPal webhook notification signature cryptographically.
+ *
+ * Reuses a long-lived module-level verifier with certificate caching and
+ * replay protection store by default. When custom configuration is passed,
+ * any unspecified stores (idempotencyStore, certificateManager) default
+ * to the shared instance to maintain replay protection and certificate caching.
  */
 export async function verifyWebhookSignature(
   params: VerifyWebhookParams,
   config?: WebhookSignatureVerifierConfig,
 ): Promise<WebhookVerificationResult> {
-  const verifier = new WebhookSignatureVerifier(config);
+  const verifier = config
+    ? new WebhookSignatureVerifier({
+        ...config,
+        idempotencyStore: config.idempotencyStore ?? getDefaultWebhookVerifier().idempotencyStore,
+        certificateManager:
+          config.certificateManager ?? getDefaultWebhookVerifier().certificateManager,
+      })
+    : getDefaultWebhookVerifier();
   return verifier.verify(params);
 }
 
 /**
  * Verifies and routes a PayPal webhook request to clearinghouse domain event sinks and listeners.
+ *
+ * Reuses a long-lived default verifier when none is explicitly provided, ensuring
+ * certificate caching and replay deduplication are preserved across invocations.
  */
 export async function routeWebhook(
   request: WebhookRequest,
   config: WebhookRouterConfig,
 ): Promise<WebhookProcessingResult> {
-  const router = new WebhookRouter(config);
+  const verifier = config.verifier ?? getDefaultWebhookVerifier();
+  const router = new WebhookRouter({ ...config, verifier });
   return router.handleWebhook(request);
 }
