@@ -152,10 +152,17 @@ describe("Catalog Normalizer & Canonical Representation", () => {
       expect(normalizeDomain("target.com:443/item")).toBe("target.com");
     });
 
+    it("normalizes internationalized domain names (IDN) to standard punycode", () => {
+      expect(normalizeDomain("bücher.de")).toBe("xn--bcher-kva.de");
+      expect(normalizeDomain("https://www.bücher.de/shop")).toBe("xn--bcher-kva.de");
+      expect(normalizeDomain("xn--bcher-kva.de")).toBe("xn--bcher-kva.de");
+    });
+
     it("throws Channel3ValidationError on invalid domain formats", () => {
       expect(() => normalizeDomain("")).toThrow(Channel3ValidationError);
       expect(() => normalizeDomain("localhost")).toThrow(Channel3ValidationError);
       expect(() => normalizeDomain("not-a-domain")).toThrow(Channel3ValidationError);
+      expect(() => normalizeDomain("user@domain.com")).toThrow(Channel3ValidationError);
     });
   });
 
@@ -303,6 +310,28 @@ describe("Catalog Normalizer & Canonical Representation", () => {
       expect(product.offers[0]?.merchantDomain).toBe("bestbuy.com");
       expect(product.offers[0]?.price.toMinorUnits()).toBe(7999);
       expect(product.leadOffer?.price.toMinorUnits()).toBe(7999);
+    });
+
+    it("correctly preserves and normalizes valid offers with IDN merchant domains", () => {
+      const rawProduct: ProductSummaryWire = {
+        id: "prod_buch",
+        title: "Goethe Faust",
+        offers: [
+          {
+            availability: "InStock",
+            domain: "bücher.de",
+            price: { currency: "EUR", price: 19.99 },
+            url: "https://www.bücher.de/item/123",
+          },
+        ],
+      };
+
+      const product = normalizeProduct(rawProduct);
+      expect(product.offers).toHaveLength(1);
+      expect(product.offers[0]?.merchantDomain).toBe("xn--bcher-kva.de");
+      expect(product.offers[0]?.price.toMinorUnits()).toBe(1999);
+      expect(product.offers[0]?.price.currency).toBe("EUR");
+      expect(product.leadOffer?.merchantDomain).toBe("xn--bcher-kva.de");
     });
   });
 });

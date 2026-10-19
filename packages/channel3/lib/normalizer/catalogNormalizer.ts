@@ -35,17 +35,29 @@ export function normalizeDomain(rawDomain: string): string {
 
   let cleaned = rawDomain.trim().toLowerCase();
 
-  // Strip protocol if present
-  if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) {
-    try {
-      const parsed = new URL(cleaned);
-      cleaned = parsed.hostname;
-    } catch {
-      cleaned = cleaned.replace(/^https?:\/\//, "");
-    }
+  // Reject credentials or mail addresses passed as domains
+  if (cleaned.includes("@")) {
+    throw new Channel3ValidationError(`Invalid merchant domain format: "${rawDomain}"`, {
+      domain: rawDomain,
+    });
   }
 
-  // Strip path, query params, hash
+  // Use WHATWG URL parsing to handle protocol stripping, path/port/query stripping, and IDN to punycode conversion
+  const urlCandidate =
+    cleaned.startsWith("http://") || cleaned.startsWith("https://")
+      ? cleaned
+      : `https://${cleaned}`;
+
+  try {
+    const parsed = new URL(urlCandidate);
+    if (parsed.hostname) {
+      cleaned = parsed.hostname;
+    }
+  } catch {
+    cleaned = cleaned.replace(/^https?:\/\//, "");
+  }
+
+  // Strip path, query params, hash if fallback was used
   const slashIdx = cleaned.indexOf("/");
   if (slashIdx !== -1) {
     cleaned = cleaned.slice(0, slashIdx);
@@ -69,6 +81,9 @@ export function normalizeDomain(rawDomain: string): string {
   if (cleaned.startsWith("www.")) {
     cleaned = cleaned.slice(4);
   }
+
+  // Strip trailing dot
+  cleaned = cleaned.replace(/\.+$/, "");
 
   // Basic RFC validation
   if (!cleaned?.includes(".") || /[^a-z0-9.-]/.test(cleaned)) {
