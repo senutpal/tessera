@@ -429,4 +429,34 @@ describe("Channel3Client MCP Engine", () => {
     scopedClient.threadId = "mutated_child_thread";
     expect(client.threadId).toBe("parent_thread");
   });
+
+  it("times out if reading response body exceeds timeoutMs", async () => {
+    const mockFetch = vi.fn(async (_url, init) => {
+      const signal = init?.signal as AbortSignal;
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ "Content-Type": "application/json" }),
+        json: async () => {
+          return new Promise((_resolve, reject) => {
+            const onAbort = () => {
+              const err = new Error("The operation was aborted");
+              err.name = "AbortError";
+              reject(err);
+            };
+            if (signal?.aborted) return onAbort();
+            signal?.addEventListener("abort", onAbort);
+          });
+        },
+      } as unknown as Response;
+    }) as unknown as typeof globalThis.fetch;
+
+    const client = new Channel3Client({
+      timeoutMs: 50,
+      maxRetries: 0,
+      fetch: mockFetch,
+    });
+
+    await expect(client.searchProducts({ query: "test" })).rejects.toThrow(Channel3TimeoutError);
+  });
 });
