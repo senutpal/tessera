@@ -30,6 +30,18 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.5)(yaml@2.9.1)
 
+  packages/channel3:
+    dependencies:
+      '@tessera/core':
+        specifier: workspace:*
+        version: link:../core
+      '@tessera/mandates':
+        specifier: workspace:*
+        version: link:../mandates
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+
   packages/core: {}
 
   packages/mandates:
@@ -37,6 +49,27 @@ importers:
       '@tessera/core':
         specifier: workspace:*
         version: link:../core
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+
+  packages/paypal:
+    dependencies:
+      '@tessera/core':
+        specifier: workspace:*
+        version: link:../core
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
+
+  packages/policy:
+    dependencies:
+      '@tessera/core':
+        specifier: workspace:*
+        version: link:../core
+      '@tessera/mandates':
+        specifier: workspace:*
+        version: link:../mandates
       zod:
         specifier: ^3.24.2
         version: 3.25.76
