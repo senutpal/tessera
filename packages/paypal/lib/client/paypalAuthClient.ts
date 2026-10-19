@@ -134,7 +134,12 @@ export class PayPalAuthClient {
     });
 
     if (!res.ok) {
-      const errorText = await res.text();
+      let errorText = "";
+      try {
+        errorText = await res.text();
+      } catch {
+        errorText = "";
+      }
       let errorDetails: Record<string, unknown> = {};
       try {
         errorDetails = JSON.parse(errorText) as Record<string, unknown>;
@@ -142,25 +147,43 @@ export class PayPalAuthClient {
         errorDetails = { rawBody: errorText };
       }
 
+      const debugId =
+        typeof errorDetails.debug_id === "string"
+          ? errorDetails.debug_id
+          : (res.headers?.get?.("paypal-debug-id") ?? undefined);
+      const errorName =
+        typeof errorDetails.error === "string"
+          ? errorDetails.error
+          : typeof errorDetails.name === "string"
+            ? errorDetails.name
+            : undefined;
+
       if (res.status === 401 || res.status === 403) {
         throw new UnauthorizedError("PayPal authentication failed: invalid client credentials", {
           httpStatus: res.status,
+          debugId,
+          errorName,
           ...errorDetails,
         });
       }
 
-      const debugId = typeof errorDetails.debug_id === "string" ? errorDetails.debug_id : undefined;
-      const errorName = typeof errorDetails.name === "string" ? errorDetails.name : undefined;
+      const desc =
+        typeof errorDetails.error_description === "string"
+          ? errorDetails.error_description
+          : typeof errorDetails.message === "string"
+            ? errorDetails.message
+            : res.statusText || "";
 
-      throw new PayPalApiError(
-        `Failed to acquire PayPal OAuth token (HTTP ${res.status}): ${res.statusText}`,
-        {
-          httpStatus: res.status,
-          debugId,
-          paypalErrorName: errorName,
-          details: errorDetails,
-        },
-      );
+      const errorMessage = desc
+        ? `Failed to acquire PayPal OAuth token (HTTP ${res.status}): ${desc}`
+        : `Failed to acquire PayPal OAuth token (HTTP ${res.status})`;
+
+      throw new PayPalApiError(errorMessage, {
+        httpStatus: res.status,
+        debugId,
+        paypalErrorName: errorName,
+        details: errorDetails,
+      });
     }
 
     const json = await res.json();
@@ -194,7 +217,7 @@ export class PayPalAuthClient {
     const signal: AbortSignal = controller.signal;
     const onOuterAbort = () => {
       clearTimeout(timeout);
-      controller.abort();
+      controller.abort(init.signal?.reason);
     };
 
     if (init.signal) {
@@ -213,11 +236,13 @@ export class PayPalAuthClient {
       });
       return response;
     } catch (err: unknown) {
-      if (
-        timedOut &&
-        ((err instanceof DOMException && err.name === "AbortError") ||
-          (err as Error)?.name === "AbortError")
-      ) {
+      const isAbortOrTimeout =
+        (err instanceof DOMException &&
+          (err.name === "AbortError" || err.name === "TimeoutError")) ||
+        (err as Error)?.name === "AbortError" ||
+        (err as Error)?.name === "TimeoutError";
+
+      if (timedOut && isAbortOrTimeout) {
         throw new PayPalTimeoutError(
           `PayPal request to ${url} timed out after ${this.timeoutMs}ms`,
           { url, timeoutMs: this.timeoutMs },

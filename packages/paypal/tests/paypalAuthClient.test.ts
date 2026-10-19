@@ -195,6 +195,32 @@ describe("PayPalAuthClient OAuth2 Engine", () => {
       httpStatus: 500,
       code: "PAYPAL_API_ERROR",
       debugId: "dbg_token_500",
+      paypalErrorName: "server_error",
+    });
+  });
+
+  it("extracts debugId from paypal-debug-id header when body does not include debug_id", async () => {
+    const mockFetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ error: "service_unavailable" }), {
+        status: 503,
+        statusText: "Service Unavailable",
+        headers: {
+          "Content-Type": "application/json",
+          "paypal-debug-id": "hdr_dbg_999",
+        },
+      });
+    });
+
+    const client = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+
+    await expect(client.getAccessToken()).rejects.toMatchObject({
+      httpStatus: 503,
+      debugId: "hdr_dbg_999",
+      paypalErrorName: "service_unavailable",
     });
   });
 
@@ -314,6 +340,45 @@ describe("PayPalAuthClient OAuth2 Engine", () => {
 
     await expect(fetchPromise).rejects.toThrow("Caller aborted request");
     await expect(fetchPromise).rejects.not.toThrow(PayPalTimeoutError);
+  });
+
+  it("propagates custom cancellation reason when caller aborts with a specific error", async () => {
+    const callerController = new AbortController();
+    const customReason = new Error("User cancelled checkout explicitly");
+
+    const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+      }
+
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) {
+          reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+          return;
+        }
+        signal?.addEventListener("abort", () => {
+          reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+        });
+      });
+    });
+
+    const client = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+
+    await client.getAccessToken();
+
+    const fetchPromise = client.fetchAuthenticated("/v2/checkout/orders", {
+      signal: callerController.signal,
+    });
+
+    callerController.abort(customReason);
+
+    await expect(fetchPromise).rejects.toThrow("User cancelled checkout explicitly");
   });
 
   it("supports clearing cached token explicitly", async () => {
