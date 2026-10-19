@@ -120,6 +120,7 @@ export interface ProcurementOffer {
   shippingEstimateRaw?: string | undefined;
   shippingDurationIso: string;
   estimatedDeliveryDays: number;
+  condition?: string | undefined;
 }
 
 export interface ProcurementProduct {
@@ -146,6 +147,7 @@ export type QuoteEvaluationStatus =
 
 export interface ProcurementQuote {
   quoteId: string;
+  offerId?: string | undefined;
   productId: string;
   productTitle: string;
   brand?: string | undefined;
@@ -156,6 +158,7 @@ export interface ProcurementQuote {
   estimatedDeliveryDays: number;
   shippingDurationIso: string;
   inStock: boolean;
+  condition?: string | undefined;
   status: QuoteEvaluationStatus;
   rejectionReasons: string[];
   rank: number;

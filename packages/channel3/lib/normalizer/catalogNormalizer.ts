@@ -291,7 +291,11 @@ export function parseShippingEstimate(estimate: unknown): { days: number; isoDur
 /**
  * Normalizes a raw ProductOfferWire into a canonical ProcurementOffer.
  */
-export function normalizeOffer(rawOffer: ProductOfferWire, productId: string): ProcurementOffer {
+export function normalizeOffer(
+  rawOffer: ProductOfferWire,
+  productId: string,
+  index?: number,
+): ProcurementOffer {
   const merchantDomain = normalizeDomain(rawOffer.domain);
   const price = parsePriceToMoney(rawOffer.price.price, rawOffer.price.currency);
   const compareAtPrice =
@@ -301,8 +305,18 @@ export function normalizeOffer(rawOffer: ProductOfferWire, productId: string): P
 
   const shipping = parseShippingEstimate(rawOffer.shipping);
 
+  const idSuffix =
+    index != null
+      ? rawOffer.condition
+        ? `:${rawOffer.condition}:${index}`
+        : `:${index}`
+      : rawOffer.condition
+        ? `:${rawOffer.condition}`
+        : "";
+  const offerId = `${productId}:${merchantDomain}${idSuffix}`;
+
   return {
-    offerId: `${productId}:${merchantDomain}`,
+    offerId,
     merchantDomain,
     productUrl: rawOffer.url,
     price,
@@ -311,6 +325,7 @@ export function normalizeOffer(rawOffer: ProductOfferWire, productId: string): P
     shippingEstimateRaw: rawOffer.shipping,
     shippingDurationIso: shipping.isoDuration,
     estimatedDeliveryDays: shipping.days,
+    condition: rawOffer.condition,
   };
 }
 
@@ -319,9 +334,17 @@ export function normalizeOffer(rawOffer: ProductOfferWire, productId: string): P
  */
 export function normalizeProduct(rawProduct: ProductSummaryWire): ProcurementProduct {
   const rawOffers: ProductOfferWire[] = rawProduct.offers ?? [];
-  const offers: ProcurementOffer[] = rawOffers.map((o: ProductOfferWire) =>
-    normalizeOffer(o, rawProduct.id),
-  );
+  const offers: ProcurementOffer[] = [];
+  for (let i = 0; i < rawOffers.length; i++) {
+    const o = rawOffers[i];
+    if (!o) continue;
+    try {
+      offers.push(normalizeOffer(o, rawProduct.id, i));
+    } catch (err) {
+      if (!(err instanceof Error)) throw err;
+      // Skip malformed offers so one bad offer does not fail the entire product or search
+    }
+  }
 
   // Determine lowest price and lead offer (lowest price among in-stock offers, or overall lowest)
   const inStockOffers = offers.filter((o) => o.inStock);
