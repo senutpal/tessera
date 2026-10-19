@@ -1,6 +1,6 @@
 import { UnauthorizedError } from "@tessera/core";
 import { describe, expect, it, vi } from "vitest";
-import { PayPalAuthClient, PayPalAuthError, PayPalTimeoutError } from "../index.js";
+import { PayPalApiError, PayPalAuthClient, PayPalAuthError, PayPalTimeoutError } from "../index.js";
 
 function createMockTokenResponse(overrides: Record<string, unknown> = {}) {
   return {
@@ -165,6 +165,37 @@ describe("PayPalAuthClient OAuth2 Engine", () => {
     });
 
     await expect(client.getAccessToken()).rejects.toThrow(UnauthorizedError);
+  });
+
+  it("throws PayPalApiError for non-401/403 HTTP errors on token endpoint preserving status and details", async () => {
+    const mockFetch = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          error: "server_error",
+          error_description: "PayPal Internal Server Error",
+          debug_id: "dbg_token_500",
+        }),
+        {
+          status: 500,
+          statusText: "Internal Server Error",
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+
+    const client = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+
+    const promise = client.getAccessToken();
+    await expect(promise).rejects.toThrow(PayPalApiError);
+    await expect(promise).rejects.toMatchObject({
+      httpStatus: 500,
+      code: "PAYPAL_API_ERROR",
+      debugId: "dbg_token_500",
+    });
   });
 
   it("handles fetchAuthenticated with automatic Bearer injection and 401 token refresh retry", async () => {

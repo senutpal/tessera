@@ -1,5 +1,6 @@
 import { UnauthorizedError } from "@tessera/core";
 import {
+  PayPalApiError,
   PayPalAuthError,
   type PayPalConfig,
   PayPalOAuthTokenSchema,
@@ -148,11 +149,16 @@ export class PayPalAuthClient {
         });
       }
 
-      throw new UnauthorizedError(
+      const debugId = typeof errorDetails.debug_id === "string" ? errorDetails.debug_id : undefined;
+      const errorName = typeof errorDetails.name === "string" ? errorDetails.name : undefined;
+
+      throw new PayPalApiError(
         `Failed to acquire PayPal OAuth token (HTTP ${res.status}): ${res.statusText}`,
         {
           httpStatus: res.status,
-          ...errorDetails,
+          debugId,
+          paypalErrorName: errorName,
+          details: errorDetails,
         },
       );
     }
