@@ -53,10 +53,16 @@ export {
   type ClearinghouseWebhookEvent,
   extractWebhookHeaders,
   PAYPAL_CERT_URL_REGEX,
+  type PayPalAuthorizationCreatedResource,
+  PayPalAuthorizationCreatedResourceSchema,
+  type PayPalAuthorizationVoidedResource,
+  PayPalAuthorizationVoidedResourceSchema,
   type PayPalVerifyWebhookSignatureRequest,
   PayPalVerifyWebhookSignatureRequestSchema,
   type PayPalVerifyWebhookSignatureResponse,
   PayPalVerifyWebhookSignatureResponseSchema,
+  type PayPalWebhookAmount,
+  PayPalWebhookAmountSchema,
   type PayPalWebhookEvent,
   PayPalWebhookEventSchema,
   type PayPalWebhookHeaders,
@@ -184,6 +190,7 @@ export function getDefaultWebhookVerifier(): WebhookSignatureVerifier {
  */
 export function resetDefaultWebhookVerifier(): void {
   defaultVerifier = undefined;
+  WebhookRouter.clearInFlightDispatches();
 }
 
 /**

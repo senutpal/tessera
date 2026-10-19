@@ -276,7 +276,10 @@ describe("WebhookRouter", () => {
       const payload = {
         id: "WH-EVT-DUP",
         event_type: "PAYMENT.AUTHORIZATION.CREATED",
-        resource: { id: "AUTH-DUP" },
+        resource: {
+          id: "AUTH-DUP",
+          amount: { currency_code: "USD", value: "10.00" },
+        },
       };
 
       const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
@@ -309,7 +312,10 @@ describe("WebhookRouter", () => {
       const payload = {
         id: "WH-EVT-SAME-ID",
         event_type: "PAYMENT.AUTHORIZATION.CREATED",
-        resource: { id: "AUTH-123" },
+        resource: {
+          id: "AUTH-123",
+          amount: { currency_code: "USD", value: "10.00" },
+        },
       };
 
       const req1 = createSignedWebhookRequest({
@@ -332,6 +338,94 @@ describe("WebhookRouter", () => {
       expect(res2.httpStatus).toBe(200);
       expect(res2.message).toContain("Duplicate webhook event ID acknowledged and ignored");
       expect(mockEventSink.emit).toHaveBeenCalledTimes(1); // Did not dispatch twice!
+    });
+
+    it("deduplicates concurrent deliveries with identical event ID without duplicate dispatch", async () => {
+      const verifier = createMockVerifier();
+      let emitCount = 0;
+      const slowSink: WebhookEventSink = {
+        emit: vi.fn().mockImplementation(async () => {
+          emitCount++;
+          await new Promise((r) => setTimeout(r, 40));
+        }),
+      };
+
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+        eventSink: slowSink,
+      });
+
+      const payload = {
+        id: "WH-EVT-CONCURRENT-EVENT",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: {
+          id: "AUTH-CONCURRENT-1",
+          amount: { currency_code: "USD", value: "25.00" },
+        },
+      };
+
+      const req1 = createSignedWebhookRequest({
+        rawBody: JSON.stringify(payload),
+        transmissionId: "tx-concurrent-1",
+      });
+      const req2 = createSignedWebhookRequest({
+        rawBody: JSON.stringify(payload),
+        transmissionId: "tx-concurrent-2",
+      });
+
+      const [res1, res2] = await Promise.all([
+        router.handleWebhook(req1),
+        router.handleWebhook(req2),
+      ]);
+
+      const statuses = [res1.status, res2.status];
+      expect(statuses).toContain("PROCESSED");
+      expect(statuses).toContain("DUPLICATE");
+      expect(slowSink.emit).toHaveBeenCalledTimes(1);
+      expect(emitCount).toBe(1);
+    });
+
+    it("deduplicates concurrent deliveries with identical transmission ID without duplicate dispatch", async () => {
+      const verifier = createMockVerifier();
+      let emitCount = 0;
+      const slowSink: WebhookEventSink = {
+        emit: vi.fn().mockImplementation(async () => {
+          emitCount++;
+          await new Promise((r) => setTimeout(r, 40));
+        }),
+      };
+
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+        eventSink: slowSink,
+      });
+
+      const payload = {
+        id: "WH-EVT-CONCURRENT-TX",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: {
+          id: "AUTH-CONCURRENT-2",
+          amount: { currency_code: "USD", value: "35.00" },
+        },
+      };
+
+      const req = createSignedWebhookRequest({
+        rawBody: JSON.stringify(payload),
+        transmissionId: "tx-identical-concurrent",
+      });
+
+      const [res1, res2] = await Promise.all([
+        router.handleWebhook(req),
+        router.handleWebhook(req),
+      ]);
+
+      const statuses = [res1.status, res2.status];
+      expect(statuses).toContain("PROCESSED");
+      expect(statuses).toContain("DUPLICATE");
+      expect(slowSink.emit).toHaveBeenCalledTimes(1);
+      expect(emitCount).toBe(1);
     });
   });
 
@@ -483,6 +577,131 @@ describe("WebhookRouter", () => {
       expect(result.httpStatus).toBe(400);
       expect(result.message).toContain("Missing or empty required resource.id");
     });
+
+    it("returns MALFORMED_PAYLOAD with HTTP 400 when PAYMENT.AUTHORIZATION.CREATED is missing amount", async () => {
+      const verifier = createMockVerifier();
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      const payload = {
+        id: "WH-EVT-NO-AMT",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: {
+          id: "AUTH-NO-AMT",
+          status: "CREATED",
+        },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+      const result = await router.handleWebhook(req);
+
+      expect(result.status).toBe("MALFORMED_PAYLOAD");
+      expect(result.httpStatus).toBe(400);
+      expect(result.message).toContain(
+        "Failed to transform PAYMENT.AUTHORIZATION.CREATED resource",
+      );
+    });
+
+    it("returns MALFORMED_PAYLOAD with HTTP 400 when amount object is missing value or currency", async () => {
+      const verifier = createMockVerifier();
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      const payload = {
+        id: "WH-EVT-PARTIAL-AMT",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: {
+          id: "AUTH-PARTIAL-AMT",
+          status: "CREATED",
+          amount: { currency_code: "USD" }, // missing value and total
+        },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+      const result = await router.handleWebhook(req);
+
+      expect(result.status).toBe("MALFORMED_PAYLOAD");
+      expect(result.httpStatus).toBe(400);
+      expect(result.message).toContain(
+        "Failed to transform PAYMENT.AUTHORIZATION.CREATED resource",
+      );
+    });
+
+    it("returns MALFORMED_PAYLOAD with HTTP 400 when PAYMENT.AUTHORIZATION.VOIDED has empty id", async () => {
+      const verifier = createMockVerifier();
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      const payload = {
+        id: "WH-EVT-VOID-NO-ID",
+        event_type: "PAYMENT.AUTHORIZATION.VOIDED",
+        resource: {
+          id: "   ",
+          status: "VOIDED",
+        },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+      const result = await router.handleWebhook(req);
+
+      expect(result.status).toBe("MALFORMED_PAYLOAD");
+      expect(result.httpStatus).toBe(400);
+      expect(result.message).toContain("Failed to transform PAYMENT.AUTHORIZATION.VOIDED resource");
+    });
+
+    it("returns MALFORMED_PAYLOAD with HTTP 400 when PAYMENT.AUTHORIZATION.VOIDED has malformed amount", async () => {
+      const verifier = createMockVerifier();
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      const payload = {
+        id: "WH-EVT-VOID-BAD-AMT",
+        event_type: "PAYMENT.AUTHORIZATION.VOIDED",
+        resource: {
+          id: "AUTH-VOID-1",
+          amount: { currency_code: "USD" }, // missing value
+        },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+      const result = await router.handleWebhook(req);
+
+      expect(result.status).toBe("MALFORMED_PAYLOAD");
+      expect(result.httpStatus).toBe(400);
+      expect(result.message).toContain("Failed to transform PAYMENT.AUTHORIZATION.VOIDED resource");
+    });
+
+    it("returns MALFORMED_PAYLOAD with HTTP 400 when envelope event id is empty or whitespace", async () => {
+      const verifier = createMockVerifier();
+      const router = new WebhookRouter({
+        webhookId: TEST_WEBHOOK_ID,
+        verifier,
+      });
+
+      const payload = {
+        id: "   ",
+        event_type: "PAYMENT.AUTHORIZATION.CREATED",
+        resource: {
+          id: "AUTH-OK",
+          amount: { currency_code: "USD", value: "10.00" },
+        },
+      };
+
+      const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
+      const result = await router.handleWebhook(req);
+
+      expect(result.status).toBe("MALFORMED_PAYLOAD");
+      expect(result.httpStatus).toBe(400);
+      expect(result.message).toContain("envelope schema");
+    });
   });
 
   describe("Dispatch Error Resilience", () => {
@@ -501,7 +720,10 @@ describe("WebhookRouter", () => {
       const payload = {
         id: "WH-EVT-CRASH",
         event_type: "PAYMENT.AUTHORIZATION.CREATED",
-        resource: { id: "AUTH-CRASH" },
+        resource: {
+          id: "AUTH-CRASH",
+          amount: { currency_code: "USD", value: "10.00" },
+        },
       };
 
       const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });
@@ -533,7 +755,10 @@ describe("WebhookRouter", () => {
       const payload = {
         id: "WH-EVT-RETRYABLE",
         event_type: "PAYMENT.AUTHORIZATION.CREATED",
-        resource: { id: "AUTH-RETRY" },
+        resource: {
+          id: "AUTH-RETRY",
+          amount: { currency_code: "USD", value: "10.00" },
+        },
       };
 
       const req = createSignedWebhookRequest({ rawBody: JSON.stringify(payload) });

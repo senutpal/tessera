@@ -3,6 +3,9 @@ import {
   type ClearinghouseAuthorizationCreatedEvent,
   type ClearinghouseAuthorizationVoidedEvent,
   type ClearinghouseWebhookEvent,
+  PayPalAuthorizationCreatedResourceSchema,
+  PayPalAuthorizationVoidedResourceSchema,
+  type PayPalWebhookAmount,
   PayPalWebhookEventSchema,
   type WebhookEventSink,
   type WebhookProcessingResult,
@@ -27,10 +30,19 @@ export interface WebhookRouterConfig {
  * and dispatches them safely to internal event sinks and listeners.
  */
 export class WebhookRouter {
+  private static readonly inFlightDispatches = new Map<string, Promise<WebhookProcessingResult>>();
+
   public readonly webhookId: string;
   public readonly verifier: WebhookSignatureVerifier;
   public readonly eventSink?: WebhookEventSink | undefined;
   private readonly handlers = new Map<string, WebhookEventHandler[]>();
+
+  /**
+   * Resets active in-flight dispatch promises (used primarily in test teardown).
+   */
+  public static clearInFlightDispatches(): void {
+    WebhookRouter.inFlightDispatches.clear();
+  }
 
   constructor(config: WebhookRouterConfig) {
     this.webhookId = config.webhookId;
@@ -94,7 +106,7 @@ export class WebhookRouter {
       };
     }
 
-    // Check transmission ID idempotency (already successfully processed)
+    // Check transmission ID idempotency (already successfully processed or currently in-flight)
     const isDuplicateTx = await this.verifier.idempotencyStore.has(verification.transmissionId);
     if (isDuplicateTx) {
       return {
@@ -103,6 +115,19 @@ export class WebhookRouter {
         message: `Duplicate transmission acknowledged and ignored: ${verification.transmissionId}`,
         transmissionId: verification.transmissionId,
       };
+    }
+
+    const inFlightTx = WebhookRouter.inFlightDispatches.get(`tx:${verification.transmissionId}`);
+    if (inFlightTx) {
+      await inFlightTx;
+      if (await this.verifier.idempotencyStore.has(verification.transmissionId)) {
+        return {
+          status: "DUPLICATE",
+          httpStatus: 200,
+          message: `Duplicate transmission acknowledged and ignored: ${verification.transmissionId}`,
+          transmissionId: verification.transmissionId,
+        };
+      }
     }
 
     // 2. Parse Raw Request Body into JSON
@@ -164,6 +189,20 @@ export class WebhookRouter {
         transmissionId: verification.transmissionId,
         eventType: event.event_type,
       };
+    }
+
+    const inFlightEvent = WebhookRouter.inFlightDispatches.get(`event:${event.id}`);
+    if (inFlightEvent) {
+      await inFlightEvent;
+      if (await this.verifier.idempotencyStore.has(`event:${event.id}`)) {
+        return {
+          status: "DUPLICATE",
+          httpStatus: 200,
+          message: `Duplicate webhook event ID acknowledged and ignored: ${event.id}`,
+          transmissionId: verification.transmissionId,
+          eventType: event.event_type,
+        };
+      }
     }
 
     // 4. Transform & Dispatch by Event Type
@@ -230,31 +269,31 @@ export class WebhookRouter {
     event: { resource: Record<string, unknown>; create_time?: string | undefined },
     transmissionId: string,
   ): ClearinghouseAuthorizationCreatedEvent {
-    const resource = event.resource;
-    const rawAuthId = typeof resource.id === "string" ? resource.id.trim() : "";
-    if (!rawAuthId) {
-      throw new Error("Missing or empty required resource.id in authorization webhook");
+    const parseResult = PayPalAuthorizationCreatedResourceSchema.safeParse(event.resource);
+    if (!parseResult.success) {
+      throw new Error(`Invalid authorization resource: ${parseResult.error.message}`);
     }
-    const authorizationId = asAuthorizationId(rawAuthId);
+    const resource = parseResult.data;
+    const authorizationId = asAuthorizationId(resource.id.trim());
 
     const relatedIds = (resource.supplementary_data as Record<string, unknown> | undefined)
       ?.related_ids as Record<string, unknown> | undefined;
-    const orderIdStr = relatedIds?.order_id
-      ? String(relatedIds.order_id).trim()
-      : resource.order_id
-        ? String(resource.order_id).trim()
+    const orderIdRaw = relatedIds?.order_id ?? resource.order_id;
+    const orderIdStr =
+      typeof orderIdRaw === "string" && orderIdRaw.trim().length > 0
+        ? orderIdRaw.trim()
         : undefined;
 
-    const customId = resource.custom_id ? String(resource.custom_id).trim() : undefined;
-    const parentPayment = resource.parent_payment
-      ? String(resource.parent_payment).trim()
-      : undefined;
-    const amount = this.extractMoney(resource.amount);
-    const status = String(resource.status ?? resource.state ?? "CREATED");
-    const createTime = String(
-      resource.create_time ?? event.create_time ?? new Date().toISOString(),
-    );
-    const expirationTime = resource.expiration_time ? String(resource.expiration_time) : undefined;
+    const customId = resource.custom_id ? resource.custom_id.trim() : undefined;
+    const parentPayment = resource.parent_payment ? resource.parent_payment.trim() : undefined;
+    const amount = this.parseMoney(resource.amount);
+    const status = resource.status
+      ? resource.status.trim()
+      : resource.state
+        ? resource.state.trim()
+        : "CREATED";
+    const createTime = resource.create_time ?? event.create_time ?? new Date().toISOString();
+    const expirationTime = resource.expiration_time;
 
     return {
       type: "PAYMENT.AUTHORIZATION.CREATED",
@@ -266,7 +305,7 @@ export class WebhookRouter {
       expirationTime,
       parentPayment,
       customId,
-      rawResource: resource,
+      rawResource: event.resource,
       transmissionId,
       timestamp: event.create_time ?? new Date().toISOString(),
     };
@@ -276,29 +315,26 @@ export class WebhookRouter {
     event: { resource: Record<string, unknown>; create_time?: string | undefined },
     transmissionId: string,
   ): ClearinghouseAuthorizationVoidedEvent {
-    const resource = event.resource;
-    const rawAuthId = typeof resource.id === "string" ? resource.id.trim() : "";
-    if (!rawAuthId) {
-      throw new Error("Missing or empty required resource.id in authorization void webhook");
+    const parseResult = PayPalAuthorizationVoidedResourceSchema.safeParse(event.resource);
+    if (!parseResult.success) {
+      throw new Error(`Invalid authorization void resource: ${parseResult.error.message}`);
     }
-    const authorizationId = asAuthorizationId(rawAuthId);
+    const resource = parseResult.data;
+    const authorizationId = asAuthorizationId(resource.id.trim());
 
     const relatedIds = (resource.supplementary_data as Record<string, unknown> | undefined)
       ?.related_ids as Record<string, unknown> | undefined;
-    const orderIdStr = relatedIds?.order_id
-      ? String(relatedIds.order_id).trim()
-      : resource.order_id
-        ? String(resource.order_id).trim()
+    const orderIdRaw = relatedIds?.order_id ?? resource.order_id;
+    const orderIdStr =
+      typeof orderIdRaw === "string" && orderIdRaw.trim().length > 0
+        ? orderIdRaw.trim()
         : undefined;
 
-    const customId = resource.custom_id ? String(resource.custom_id).trim() : undefined;
-    const parentPayment = resource.parent_payment
-      ? String(resource.parent_payment).trim()
-      : undefined;
-    const amount = resource.amount ? this.extractMoney(resource.amount) : undefined;
-    const statusDetails = resource.status_details as Record<string, unknown> | undefined;
-    const reason = statusDetails?.reason ? String(statusDetails.reason) : undefined;
-    const updateTime = resource.update_time ? String(resource.update_time) : undefined;
+    const customId = resource.custom_id ? resource.custom_id.trim() : undefined;
+    const parentPayment = resource.parent_payment ? resource.parent_payment.trim() : undefined;
+    const amount = resource.amount ? this.parseMoney(resource.amount) : undefined;
+    const reason = resource.status_details?.reason;
+    const updateTime = resource.update_time;
 
     return {
       type: "PAYMENT.AUTHORIZATION.VOIDED",
@@ -310,20 +346,20 @@ export class WebhookRouter {
       updateTime,
       parentPayment,
       customId,
-      rawResource: resource,
+      rawResource: event.resource,
       transmissionId,
       timestamp: event.create_time ?? new Date().toISOString(),
     };
   }
 
-  private extractMoney(rawAmount: unknown): Money {
-    if (!rawAmount || typeof rawAmount !== "object") {
-      return Money.zero("USD");
+  private parseMoney(rawAmount: PayPalWebhookAmount): Money {
+    const rawCurrency = rawAmount.currency_code ?? rawAmount.currency;
+    const rawValue = rawAmount.value ?? rawAmount.total;
+    if (!rawCurrency || !rawValue) {
+      throw new Error("Missing required currency or value in amount");
     }
-    const record = rawAmount as Record<string, unknown>;
-    const rawCurrency = record.currency_code ?? record.currency ?? "USD";
-    const currency = String(rawCurrency).toUpperCase().trim();
-    const value = String(record.value ?? record.total ?? "0.00").trim();
+    const currency = rawCurrency.trim().toUpperCase();
+    const value = rawValue.trim();
     return Money.fromPayPal({ currency_code: currency, value });
   }
 
@@ -333,41 +369,55 @@ export class WebhookRouter {
     transmissionId: string,
     eventId: string,
   ): Promise<WebhookProcessingResult> {
-    try {
-      if (this.eventSink) {
-        await this.eventSink.emit(domainEvent);
+    const inFlightEventKey = `event:${eventId}`;
+    const inFlightTxKey = `tx:${transmissionId}`;
+
+    const executeDispatch = async (): Promise<WebhookProcessingResult> => {
+      try {
+        if (this.eventSink) {
+          await this.eventSink.emit(domainEvent);
+        }
+
+        const specificHandlers = this.handlers.get(eventType) ?? [];
+        const wildcardHandlers = this.handlers.get("*") ?? [];
+        const allHandlers = [...specificHandlers, ...wildcardHandlers];
+
+        for (const handler of allHandlers) {
+          await handler(domainEvent);
+        }
+
+        // Successful dispatch: commit transmission ID and event ID atomically
+        await this.verifier.idempotencyStore.record(transmissionId);
+        await this.verifier.idempotencyStore.record(`event:${eventId}`);
+
+        return {
+          status: "PROCESSED",
+          httpStatus: 200,
+          message: `Successfully processed and dispatched event: ${eventType}`,
+          eventType,
+          domainEvent,
+          transmissionId,
+        };
+      } catch (err) {
+        return {
+          status: "DISPATCH_ERROR",
+          httpStatus: 500,
+          message: `Error during domain event dispatch for ${eventType}: ${(err as Error).message}`,
+          eventType,
+          domainEvent,
+          transmissionId,
+          error: (err as Error).message,
+        };
+      } finally {
+        WebhookRouter.inFlightDispatches.delete(inFlightEventKey);
+        WebhookRouter.inFlightDispatches.delete(inFlightTxKey);
       }
+    };
 
-      const specificHandlers = this.handlers.get(eventType) ?? [];
-      const wildcardHandlers = this.handlers.get("*") ?? [];
-      const allHandlers = [...specificHandlers, ...wildcardHandlers];
+    const dispatchPromise = executeDispatch();
+    WebhookRouter.inFlightDispatches.set(inFlightEventKey, dispatchPromise);
+    WebhookRouter.inFlightDispatches.set(inFlightTxKey, dispatchPromise);
 
-      for (const handler of allHandlers) {
-        await handler(domainEvent);
-      }
-
-      // Successful dispatch: commit transmission ID and event ID atomically
-      await this.verifier.idempotencyStore.record(transmissionId);
-      await this.verifier.idempotencyStore.record(`event:${eventId}`);
-
-      return {
-        status: "PROCESSED",
-        httpStatus: 200,
-        message: `Successfully processed and dispatched event: ${eventType}`,
-        eventType,
-        domainEvent,
-        transmissionId,
-      };
-    } catch (err) {
-      return {
-        status: "DISPATCH_ERROR",
-        httpStatus: 500,
-        message: `Error during domain event dispatch for ${eventType}: ${(err as Error).message}`,
-        eventType,
-        domainEvent,
-        transmissionId,
-        error: (err as Error).message,
-      };
-    }
+    return dispatchPromise;
   }
 }

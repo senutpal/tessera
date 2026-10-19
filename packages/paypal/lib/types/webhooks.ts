@@ -19,11 +19,11 @@ export type PayPalWebhookHeaders = z.infer<typeof PayPalWebhookHeadersSchema>;
 
 export const PayPalWebhookEventSchema = z
   .object({
-    id: z.string(),
+    id: z.string().trim().min(1, "Missing or empty required webhook event id"),
     create_time: z.string().optional(),
     resource_type: z.string().optional(),
     event_version: z.string().optional(),
-    event_type: z.string(),
+    event_type: z.string().trim().min(1, "Missing or empty required webhook event_type"),
     summary: z.string().optional(),
     resource_version: z.string().optional(),
     resource: z.record(z.unknown()),
@@ -31,6 +31,71 @@ export const PayPalWebhookEventSchema = z
   })
   .passthrough();
 export type PayPalWebhookEvent = z.infer<typeof PayPalWebhookEventSchema>;
+
+export const PayPalWebhookAmountSchema = z
+  .object({
+    currency_code: z.string().trim().min(1).optional(),
+    currency: z.string().trim().min(1).optional(),
+    value: z.string().trim().min(1).optional(),
+    total: z.string().trim().min(1).optional(),
+  })
+  .passthrough()
+  .refine((data) => Boolean(data.currency_code ?? data.currency), {
+    message: "Missing required currency_code or currency in amount",
+  })
+  .refine((data) => Boolean(data.value ?? data.total), {
+    message: "Missing required value or total in amount",
+  });
+export type PayPalWebhookAmount = z.infer<typeof PayPalWebhookAmountSchema>;
+
+export const PayPalAuthorizationCreatedResourceSchema = z
+  .object({
+    id: z
+      .string({ required_error: "Missing or empty required resource.id in authorization webhook" })
+      .trim()
+      .min(1, "Missing or empty required resource.id in authorization webhook"),
+    amount: PayPalWebhookAmountSchema,
+    status: z.string().optional(),
+    state: z.string().optional(),
+    create_time: z.string().optional(),
+    expiration_time: z.string().optional(),
+    parent_payment: z.string().optional(),
+    custom_id: z.string().optional(),
+    supplementary_data: z.record(z.unknown()).optional(),
+    order_id: z.string().optional(),
+  })
+  .passthrough();
+export type PayPalAuthorizationCreatedResource = z.infer<
+  typeof PayPalAuthorizationCreatedResourceSchema
+>;
+
+export const PayPalAuthorizationVoidedResourceSchema = z
+  .object({
+    id: z
+      .string({
+        required_error: "Missing or empty required resource.id in authorization void webhook",
+      })
+      .trim()
+      .min(1, "Missing or empty required resource.id in authorization void webhook"),
+    amount: PayPalWebhookAmountSchema.optional(),
+    status: z.string().optional(),
+    status_details: z
+      .object({
+        reason: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    update_time: z.string().optional(),
+    create_time: z.string().optional(),
+    parent_payment: z.string().optional(),
+    custom_id: z.string().optional(),
+    supplementary_data: z.record(z.unknown()).optional(),
+    order_id: z.string().optional(),
+  })
+  .passthrough();
+export type PayPalAuthorizationVoidedResource = z.infer<
+  typeof PayPalAuthorizationVoidedResourceSchema
+>;
 
 export const PayPalVerifyWebhookSignatureRequestSchema = z.object({
   auth_algo: z.string(),
