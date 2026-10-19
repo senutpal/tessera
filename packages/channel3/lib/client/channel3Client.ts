@@ -123,7 +123,15 @@ export class Channel3Client {
 
         // If server returns rate limit (429) or transient 5xx, retry
         if (response.status === 429 || (response.status >= 500 && response.status <= 504)) {
-          const bodyText = await response.text().catch(() => "");
+          const bodyText = await response.text().catch((err: unknown) => {
+            if (controller.signal.aborted) throw err;
+            return "";
+          });
+          if (controller.signal.aborted) {
+            const err = new Error("The operation was aborted");
+            err.name = "AbortError";
+            throw err;
+          }
           lastError = new Channel3McpError(
             `Channel3 MCP server returned transient HTTP ${response.status}: ${bodyText}`,
             { status: response.status, attempt, bodyText },
@@ -132,7 +140,15 @@ export class Channel3Client {
         }
 
         if (!response.ok) {
-          const errBody = await response.text().catch(() => "");
+          const errBody = await response.text().catch((err: unknown) => {
+            if (controller.signal.aborted) throw err;
+            return "";
+          });
+          if (controller.signal.aborted) {
+            const err = new Error("The operation was aborted");
+            err.name = "AbortError";
+            throw err;
+          }
           throw new Channel3McpError(
             `Channel3 MCP server returned HTTP ${response.status}: ${errBody}`,
             { status: response.status, body: errBody },
