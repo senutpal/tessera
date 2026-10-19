@@ -274,6 +274,48 @@ describe("PayPalAuthClient OAuth2 Engine", () => {
     await expect(client.getAccessToken()).rejects.toThrow(PayPalTimeoutError);
   });
 
+  it("rethrows caller cancellation without converting to PayPalTimeoutError and cleans up listener", async () => {
+    const callerController = new AbortController();
+
+    const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+      }
+
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) {
+          reject(new DOMException("Caller aborted request", "AbortError"));
+          return;
+        }
+        signal?.addEventListener("abort", () => {
+          reject(new DOMException("Caller aborted request", "AbortError"));
+        });
+      });
+    });
+
+    const client = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      timeoutMs: 10_000,
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+
+    // Populate token first
+    await client.getAccessToken();
+
+    const fetchPromise = client.fetchAuthenticated("/v2/checkout/orders", {
+      signal: callerController.signal,
+    });
+
+    // Cancel from caller side
+    callerController.abort();
+
+    await expect(fetchPromise).rejects.toThrow("Caller aborted request");
+    await expect(fetchPromise).rejects.not.toThrow(PayPalTimeoutError);
+  });
+
   it("supports clearing cached token explicitly", async () => {
     let count = 0;
     const mockFetch = vi.fn(async () => {
