@@ -61,15 +61,12 @@ export class PayPalAuthClient {
       return this.inFlightTokenPromise;
     }
 
-    this.inFlightTokenPromise = this.requestNewToken()
-      .then((token) => {
+    const p = this.requestNewToken().finally(() => {
+      if (this.inFlightTokenPromise === p) {
         this.inFlightTokenPromise = null;
-        return token;
-      })
-      .catch((err) => {
-        this.inFlightTokenPromise = null;
-        throw err;
-      });
+      }
+    });
+    this.inFlightTokenPromise = p;
 
     return this.inFlightTokenPromise;
   }
@@ -106,7 +103,9 @@ export class PayPalAuthClient {
 
     // If 401 unauthorized, token may have been revoked on the server; clear and retry once
     if (res.status === 401) {
-      this.clearToken();
+      if (this.cachedToken?.accessToken === token) {
+        this.cachedToken = null;
+      }
       const freshToken = await this.getAccessToken();
       const retryHeaders = new Headers(init?.headers);
       retryHeaders.set("Authorization", `Bearer ${freshToken}`);

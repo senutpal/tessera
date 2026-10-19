@@ -277,4 +277,60 @@ describe("PayPalAuthClient OAuth2 Engine", () => {
       PayPalAuthError,
     );
   });
+
+  it("deduplicates token refresh when concurrent requests encounter 401", async () => {
+    let tokenFetches = 0;
+    const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        tokenFetches++;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return new Response(
+          JSON.stringify(createMockTokenResponse({ access_token: `TOKEN_${tokenFetches}` })),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+
+      const headers = new Headers(init?.headers);
+      const authHeader = headers.get("Authorization");
+      if (authHeader === "Bearer TOKEN_1") {
+        return new Response(JSON.stringify({ message: "Revoked" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify({ ok: true, tokenUsed: authHeader }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    const client = new PayPalAuthClient({
+      clientId: "test-client-id",
+      clientSecret: "test-client-secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+
+    // Initial token
+    await client.getAccessToken();
+    expect(tokenFetches).toBe(1);
+
+    // Concurrent requests all receiving 401 on expired/revoked TOKEN_1
+    const results = await Promise.all([
+      client.fetchAuthenticated("/resource-1"),
+      client.fetchAuthenticated("/resource-2"),
+      client.fetchAuthenticated("/resource-3"),
+    ]);
+
+    for (const res of results) {
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as { ok: boolean; tokenUsed: string };
+      expect(data.ok).toBe(true);
+      expect(data.tokenUsed).toBe("Bearer TOKEN_2");
+    }
+
+    // Only one new token request was executed across the concurrent 401s
+    expect(tokenFetches).toBe(2);
+  });
 });
