@@ -240,5 +240,69 @@ describe("Catalog Normalizer & Canonical Representation", () => {
       expect(products).toHaveLength(1);
       expect(products[0]?.offers[0]?.price.toMinorUnits()).toBe(9999);
     });
+
+    it("distinguishes multiple offers from the same merchant and preserves condition", () => {
+      const rawProduct: ProductSummaryWire = {
+        id: "prod_headphone",
+        title: "Bose QC45",
+        offers: [
+          {
+            availability: "InStock",
+            domain: "amazon.com",
+            price: { currency: "USD", price: 279.0 },
+            url: "https://amazon.com/dp/new",
+            condition: "new",
+          },
+          {
+            availability: "InStock",
+            domain: "amazon.com",
+            price: { currency: "USD", price: 219.0 },
+            url: "https://amazon.com/dp/refurb",
+            condition: "refurbished",
+          },
+        ],
+      };
+
+      const product = normalizeProduct(rawProduct);
+      expect(product.offers).toHaveLength(2);
+      expect(product.offers[0]?.offerId).not.toBe(product.offers[1]?.offerId);
+      expect(product.offers[0]?.condition).toBe("new");
+      expect(product.offers[1]?.condition).toBe("refurbished");
+      expect(product.offers[0]?.offerId).toBe("prod_headphone:amazon.com:new:0");
+      expect(product.offers[1]?.offerId).toBe("prod_headphone:amazon.com:refurbished:1");
+    });
+
+    it("isolates failures from malformed offers so valid offers survive", () => {
+      const rawProduct: ProductSummaryWire = {
+        id: "prod_mixed",
+        title: "Mixed Offers Product",
+        offers: [
+          {
+            availability: "InStock",
+            domain: "not-a-valid-domain",
+            price: { currency: "USD", price: 50.0 },
+            url: "https://bad.com/item",
+          },
+          {
+            availability: "InStock",
+            domain: "bestbuy.com",
+            price: { currency: "USD", price: -10.0 },
+            url: "https://bestbuy.com/deal",
+          },
+          {
+            availability: "InStock",
+            domain: "bestbuy.com",
+            price: { currency: "USD", price: 79.99 },
+            url: "https://bestbuy.com/valid",
+          },
+        ],
+      };
+
+      const product = normalizeProduct(rawProduct);
+      expect(product.offers).toHaveLength(1);
+      expect(product.offers[0]?.merchantDomain).toBe("bestbuy.com");
+      expect(product.offers[0]?.price.toMinorUnits()).toBe(7999);
+      expect(product.leadOffer?.price.toMinorUnits()).toBe(7999);
+    });
   });
 });
