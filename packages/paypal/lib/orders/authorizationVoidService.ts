@@ -4,6 +4,7 @@ import {
   ConflictError,
   EscrowVoidError,
   MandateValidationError,
+  Money,
   NotFoundError,
   UnauthorizedError,
 } from "@tessera/core";
@@ -30,23 +31,20 @@ export class AuthorizationVoidService {
    * Voids an active authorization hold on buyer funds (e.g. upon mandate violation or SLA breach).
    */
   public async voidAuthorization(options: VoidAuthorizationOptions): Promise<EscrowVoidResult> {
-    const authIdStr = String(options.authorizationId);
-    if (!authIdStr.trim()) {
+    if (!options.authorizationId || !String(options.authorizationId).trim()) {
       throw new MandateValidationError("Authorization ID is required to execute void.");
     }
+    const authIdStr = String(options.authorizationId).trim();
 
     const path = `/v2/payments/authorizations/${encodeURIComponent(authIdStr)}/void`;
+    const requestId = options.requestId ?? crypto.randomUUID();
     const headers = new Headers();
-    headers.set("Content-Type", "application/json");
     headers.set("Prefer", "return=representation");
-    if (options.requestId) {
-      headers.set("PayPal-Request-Id", options.requestId);
-    }
+    headers.set("PayPal-Request-Id", requestId);
 
     const res = await this.authClient.fetchAuthenticated(path, {
       method: "POST",
       headers,
-      body: "{}",
     });
 
     if (!res.ok) {
@@ -62,6 +60,30 @@ export class AuthorizationVoidService {
       }
     }
 
+    if (rawResponse && typeof rawResponse.status === "string" && rawResponse.status !== "VOIDED") {
+      throw new EscrowVoidError(
+        `PayPal authorization void failed: status returned was ${rawResponse.status}, expected VOIDED`,
+        { authorizationId: authIdStr, status: rawResponse.status, rawResponse },
+      );
+    }
+
+    let voidedAmount: Money | undefined = options.amount;
+    if (
+      !voidedAmount &&
+      rawResponse &&
+      typeof rawResponse.amount === "object" &&
+      rawResponse.amount !== null
+    ) {
+      const amtObj = rawResponse.amount as Record<string, unknown>;
+      if (typeof amtObj.currency_code === "string" && typeof amtObj.value === "string") {
+        try {
+          voidedAmount = Money.fromDecimalString(amtObj.value, amtObj.currency_code);
+        } catch {
+          // ignore parsing error if non-standard
+        }
+      }
+    }
+
     const voidedAt = new Date().toISOString();
     const result: EscrowVoidResult = {
       authorizationId: asAuthorizationId(authIdStr),
@@ -69,6 +91,9 @@ export class AuthorizationVoidService {
       voidedAt,
     };
 
+    if (voidedAmount) {
+      result.amount = voidedAmount;
+    }
     if (options.reason) {
       result.reason = options.reason;
     }
@@ -85,8 +110,8 @@ export class AuthorizationVoidService {
       if (options.orderId) {
         event.orderId = asOrderId(options.orderId);
       }
-      if (options.amount) {
-        event.amount = options.amount;
+      if (voidedAmount) {
+        event.amount = voidedAmount;
       }
       if (options.reason) {
         event.reason = options.reason;
@@ -108,8 +133,25 @@ export class AuthorizationVoidService {
     }
 
     const errorName = typeof parsed.name === "string" ? parsed.name : undefined;
-    const message = typeof parsed.message === "string" ? parsed.message : defaultMessage;
     const debugId = typeof parsed.debug_id === "string" ? parsed.debug_id : undefined;
+
+    const detailsList = Array.isArray(parsed.details) ? parsed.details : [];
+    const detailsSummary = detailsList
+      .map((d: unknown) => {
+        if (typeof d === "object" && d !== null) {
+          const item = d as Record<string, unknown>;
+          const issue = typeof item.issue === "string" ? item.issue : "";
+          const desc = typeof item.description === "string" ? item.description : "";
+          if (issue && desc) return `${issue}: ${desc}`;
+          return issue || desc;
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("; ");
+
+    const baseMessage = typeof parsed.message === "string" ? parsed.message : defaultMessage;
+    const message = detailsSummary ? `${baseMessage} (${detailsSummary})` : baseMessage;
 
     if (res.status === 401 || res.status === 403) {
       throw new UnauthorizedError(message, {

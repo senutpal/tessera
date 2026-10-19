@@ -96,6 +96,11 @@ export const PayPalAuthorizationRecordSchema = z
       "PENDING",
       "EXPIRED",
     ]),
+    status_details: z
+      .object({
+        reason: z.string().optional(),
+      })
+      .optional(),
     amount: PayPalAmountSchema,
     seller_protection: z
       .object({
@@ -128,6 +133,8 @@ export const PayPalOrderResponseSchema = z
         z
           .object({
             reference_id: z.string().optional(),
+            custom_id: z.string().optional(),
+            invoice_id: z.string().optional(),
             amount: PayPalAmountSchema.optional(),
             payments: z
               .object({
@@ -249,6 +256,7 @@ export interface EscrowOrder {
   amount: Money;
   referenceId?: string | undefined;
   customId?: string | undefined;
+  authorizationId?: AuthorizationId | undefined;
   links: PayPalLinkWire[];
   rawResponse: PayPalOrderResponse;
 }
@@ -258,6 +266,11 @@ export interface EscrowAuthorization {
   orderId: OrderId;
   status: PayPalAuthorizationStatus;
   amount: Money;
+  statusDetails?:
+    | {
+        reason?: string | undefined;
+      }
+    | undefined;
   expirationTime?: string | undefined;
   createTime?: string | undefined;
   rawResponse: PayPalOrderResponse;
@@ -267,6 +280,7 @@ export interface EscrowVoidResult {
   authorizationId: AuthorizationId;
   status: "VOIDED";
   voidedAt: string;
+  amount?: Money | undefined;
   reason?: string | undefined;
   rawResponse?: Record<string, unknown> | undefined;
 }
