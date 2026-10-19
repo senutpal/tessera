@@ -3,6 +3,7 @@ import {
   asOrderId,
   ConflictError,
   EscrowVoidError,
+  MandateValidationError,
   Money,
   NotFoundError,
 } from "@tessera/core";
@@ -255,5 +256,160 @@ describe("AuthorizationVoidService (Escrow Release/Void Engine)", () => {
     await expect(
       voidService.voidAuthorization({ authorizationId: "AUTH_UNPROCESSABLE" }),
     ).rejects.toThrow(EscrowVoidError);
+  });
+
+  it("throws MandateValidationError when authorizationId is empty, blank, or null", async () => {
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: vi.fn() as unknown as typeof fetch,
+    });
+    const voidService = new AuthorizationVoidService(auth);
+
+    await expect(voidService.voidAuthorization({ authorizationId: "" })).rejects.toThrow(
+      MandateValidationError,
+    );
+    await expect(voidService.voidAuthorization({ authorizationId: "   " })).rejects.toThrow(
+      MandateValidationError,
+    );
+    await expect(
+      voidService.voidAuthorization({ authorizationId: null as unknown as string }),
+    ).rejects.toThrow(MandateValidationError);
+  });
+
+  it("auto-generates PayPal-Request-Id UUID header and does not send body or Content-Type header on void POST", async () => {
+    let capturedHeaders: Headers | undefined;
+    let capturedBody: unknown;
+
+    const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+      }
+      capturedHeaders = new Headers(init?.headers);
+      capturedBody = init?.body;
+      return new Response(null, { status: 204 });
+    });
+
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+    const voidService = new AuthorizationVoidService(auth);
+
+    await voidService.voidAuthorization({ authorizationId: "AUTH-AUTO-ID" });
+
+    expect(capturedHeaders?.get("PayPal-Request-Id")).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+    expect(capturedHeaders?.get("Content-Type")).toBeNull();
+    expect(capturedBody).toBeUndefined();
+  });
+
+  it("throws EscrowVoidError when 200 representation response returns status other than VOIDED", async () => {
+    const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({
+          id: "AUTH-NOT-VOIDED",
+          status: "CAPTURED",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+    const voidService = new AuthorizationVoidService(auth);
+
+    await expect(
+      voidService.voidAuthorization({ authorizationId: "AUTH-NOT-VOIDED" }),
+    ).rejects.toThrow(EscrowVoidError);
+  });
+
+  it("extracts voided amount from 200 representation response when amount is not provided in options", async () => {
+    const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({
+          id: "0VF52814937998046",
+          status: "VOIDED",
+          amount: {
+            currency_code: "EUR",
+            value: "149.50",
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const events: EscrowHoldVoidedEvent[] = [];
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+    const voidService = new AuthorizationVoidService(auth, {
+      eventSink: {
+        emit: (e) => {
+          events.push(e);
+        },
+      },
+    });
+
+    const result = await voidService.voidAuthorization({
+      authorizationId: "0VF52814937998046",
+    });
+
+    expect(result.amount?.currency).toBe("EUR");
+    expect(result.amount?.toDecimalString()).toBe("149.50");
+    expect(events).toHaveLength(1);
+    expect(events[0]?.amount?.currency).toBe("EUR");
+    expect(events[0]?.amount?.toDecimalString()).toBe("149.50");
+  });
+
+  it("enriches error messages with PayPal issues and descriptions on void failure", async () => {
+    const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({
+          name: "UNPROCESSABLE_ENTITY",
+          message: "The requested action could not be performed.",
+          details: [
+            {
+              issue: "PREVIOUSLY_CAPTURED",
+              description: "Authorization has been previously captured and cannot be voided.",
+            },
+          ],
+        }),
+        { status: 422, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+    const voidService = new AuthorizationVoidService(auth);
+
+    await expect(
+      voidService.voidAuthorization({ authorizationId: "CAPTURED_AUTH" }),
+    ).rejects.toThrow(
+      /PREVIOUSLY_CAPTURED: Authorization has been previously captured and cannot be voided\./,
+    );
   });
 });

@@ -1,6 +1,7 @@
 import {
   ConflictError,
   EscrowAuthorizationError,
+  MandateValidationError,
   Money,
   NotFoundError,
   UnauthorizedError,
@@ -56,6 +57,7 @@ function createMockAuthorizeResponse(overrides: Record<string, unknown> = {}) {
     purchase_units: [
       {
         reference_id: "unit-001",
+        custom_id: undefined as string | undefined,
         payments: {
           authorizations: [
             {
@@ -458,5 +460,292 @@ describe("OrdersEscrowService (Orders v2 Authorize Engine)", () => {
         amount: Money.fromCents(5000, "USD"),
       }),
     ).rejects.toThrow(UnauthorizedError);
+  });
+
+  it("throws MandateValidationError when item sum does not equal order total amount", async () => {
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: vi.fn() as unknown as typeof fetch,
+    });
+    const service = new OrdersEscrowService(auth);
+
+    await expect(
+      service.createEscrowOrder({
+        amount: Money.fromCents(5000, "USD"), // $50.00
+        items: [
+          {
+            name: "Item A",
+            quantity: 1,
+            unitAmount: Money.fromCents(4000, "USD"), // $40.00 != $50.00
+          },
+        ],
+      }),
+    ).rejects.toThrow(MandateValidationError);
+  });
+
+  it("throws MandateValidationError when item quantity is not a valid positive integer string", async () => {
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: vi.fn() as unknown as typeof fetch,
+    });
+    const service = new OrdersEscrowService(auth);
+
+    await expect(
+      service.createEscrowOrder({
+        amount: Money.fromCents(5000, "USD"),
+        items: [
+          {
+            name: "Item Decimal Qty",
+            quantity: "2.5",
+            unitAmount: Money.fromCents(2000, "USD"),
+          },
+        ],
+      }),
+    ).rejects.toThrow(MandateValidationError);
+
+    await expect(
+      service.createEscrowOrder({
+        amount: Money.fromCents(5000, "USD"),
+        items: [
+          {
+            name: "Item Non-numeric",
+            quantity: "10abc",
+            unitAmount: Money.fromCents(500, "USD"),
+          },
+        ],
+      }),
+    ).rejects.toThrow(MandateValidationError);
+  });
+
+  it("throws MandateValidationError when item unit amount is zero or negative", async () => {
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: vi.fn() as unknown as typeof fetch,
+    });
+    const service = new OrdersEscrowService(auth);
+
+    await expect(
+      service.createEscrowOrder({
+        amount: Money.fromCents(0, "USD"),
+      }),
+    ).rejects.toThrow(MandateValidationError);
+
+    await expect(
+      service.createEscrowOrder({
+        amount: Money.fromCents(1000, "USD"),
+        items: [
+          {
+            name: "Zero Item",
+            quantity: 1,
+            unitAmount: Money.zero("USD"),
+          },
+        ],
+      }),
+    ).rejects.toThrow(MandateValidationError);
+  });
+
+  it("throws MandateValidationError when orderId is empty, blank, or null", async () => {
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: vi.fn() as unknown as typeof fetch,
+    });
+    const service = new OrdersEscrowService(auth);
+
+    await expect(service.authorizeOrder({ orderId: "" })).rejects.toThrow(MandateValidationError);
+    await expect(service.authorizeOrder({ orderId: "   " })).rejects.toThrow(
+      MandateValidationError,
+    );
+    await expect(service.authorizeOrder({ orderId: null as unknown as string })).rejects.toThrow(
+      MandateValidationError,
+    );
+    await expect(service.getOrder("")).rejects.toThrow(MandateValidationError);
+    await expect(service.getOrder(null as unknown as string)).rejects.toThrow(
+      MandateValidationError,
+    );
+  });
+
+  it("auto-generates PayPal-Request-Id UUID header when requestId is omitted", async () => {
+    let capturedHeaderRequestId: string | null = null;
+    const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+      }
+      const headers = new Headers(init?.headers);
+      capturedHeaderRequestId = headers.get("PayPal-Request-Id");
+      return new Response(JSON.stringify(createMockAuthorizeResponse()), { status: 201 });
+    });
+
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+    const service = new OrdersEscrowService(auth);
+
+    await service.authorizeOrder({ orderId: "ORDER-AUTO-UUID" });
+    expect(capturedHeaderRequestId).toBeDefined();
+    expect(capturedHeaderRequestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it("throws EscrowAuthorizationError when authorization status is DENIED or EXPIRED", async () => {
+    const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+      }
+      const deniedResponse = createMockAuthorizeResponse({
+        purchase_units: [
+          {
+            reference_id: "unit-001",
+            payments: {
+              authorizations: [
+                {
+                  id: "0AW2184448108334S",
+                  status: "DENIED",
+                  amount: {
+                    currency_code: "USD",
+                    value: "249.99",
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      });
+      return new Response(JSON.stringify(deniedResponse), { status: 201 });
+    });
+
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+    const service = new OrdersEscrowService(auth);
+
+    await expect(service.authorizeOrder({ orderId: "ORDER-DENIED" })).rejects.toThrow(
+      EscrowAuthorizationError,
+    );
+  });
+
+  it("maps PENDING status and statusDetails reason on authorization hold", async () => {
+    const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+      }
+      const pendingResponse = createMockAuthorizeResponse({
+        purchase_units: [
+          {
+            reference_id: "unit-001",
+            payments: {
+              authorizations: [
+                {
+                  id: "0AW2184448108334S",
+                  status: "PENDING",
+                  status_details: { reason: "PENDING_REVIEW" },
+                  amount: {
+                    currency_code: "USD",
+                    value: "249.99",
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      });
+      return new Response(JSON.stringify(pendingResponse), { status: 201 });
+    });
+
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+    const service = new OrdersEscrowService(auth);
+
+    const authorization = await service.authorizeOrder({ orderId: "ORDER-PENDING" });
+    expect(authorization.status).toBe("PENDING");
+    expect(authorization.statusDetails?.reason).toBe("PENDING_REVIEW");
+  });
+
+  it("getOrder extracts customId and authorizationId when present", async () => {
+    const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+      }
+      const response = createMockAuthorizeResponse({
+        purchase_units: [
+          {
+            reference_id: "unit-001",
+            custom_id: "CUSTOM-TRACK-777",
+            payments: {
+              authorizations: [
+                {
+                  id: "0AW2184448108334S",
+                  status: "CREATED",
+                  amount: {
+                    currency_code: "USD",
+                    value: "249.99",
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      });
+      return new Response(JSON.stringify(response), { status: 200 });
+    });
+
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+    const service = new OrdersEscrowService(auth);
+
+    const order = await service.getOrder("ORDER-WITH-AUTH");
+    expect(order.customId).toBe("CUSTOM-TRACK-777");
+    expect(order.authorizationId).toBe("0AW2184448108334S");
+  });
+
+  it("enriches error messages with PayPal issues and descriptions", async () => {
+    const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({
+          name: "UNPROCESSABLE_ENTITY",
+          message: "The requested action could not be performed.",
+          details: [
+            {
+              issue: "ORDER_NOT_APPROVED",
+              description: "Payer has not approved the Order for payment.",
+            },
+          ],
+        }),
+        { status: 422, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+    const service = new OrdersEscrowService(auth);
+
+    await expect(service.authorizeOrder({ orderId: "UNAPPROVED_ORDER" })).rejects.toThrow(
+      /ORDER_NOT_APPROVED: Payer has not approved the Order for payment/,
+    );
   });
 });

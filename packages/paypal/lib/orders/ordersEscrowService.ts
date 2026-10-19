@@ -25,6 +25,14 @@ function parseMoneyInput(input: Money | { currency_code: string; value: string }
   if (input instanceof Money) {
     return input;
   }
+  if (
+    !input ||
+    typeof input !== "object" ||
+    typeof input.currency_code !== "string" ||
+    typeof input.value !== "string"
+  ) {
+    throw new MandateValidationError("Invalid monetary input payload", { input });
+  }
   return Money.fromDecimalString(input.value, input.currency_code);
 }
 
@@ -43,7 +51,10 @@ export class OrdersEscrowService {
       );
     }
 
-    const referenceId = options.referenceId ?? "default-unit";
+    const referenceId =
+      options.referenceId && options.referenceId.trim().length > 0
+        ? options.referenceId.trim()
+        : "default";
     const purchaseUnit: PayPalPurchaseUnitWire = {
       reference_id: referenceId,
       amount: {
@@ -74,6 +85,16 @@ export class OrdersEscrowService {
 
     if (options.items && options.items.length > 0) {
       const { itemsWire, itemTotal } = this.formatItems(options.items, money.currency);
+      if (!itemTotal.equals(money)) {
+        throw new MandateValidationError(
+          `Sum of item amounts (${itemTotal.toDecimalString()} ${itemTotal.currency}) does not match order amount (${money.toDecimalString()} ${money.currency})`,
+          {
+            itemTotal: itemTotal.toDecimalString(),
+            orderAmount: money.toDecimalString(),
+            currency: money.currency,
+          },
+        );
+      }
       purchaseUnit.items = itemsWire;
       purchaseUnit.amount.breakdown = {
         item_total: {
@@ -146,17 +167,16 @@ export class OrdersEscrowService {
    * Authorizes an approved order, placing the escrow hold and returning the authorization_id.
    */
   public async authorizeOrder(options: AuthorizeOrderOptions): Promise<EscrowAuthorization> {
-    const orderIdStr = String(options.orderId);
-    if (!orderIdStr.trim()) {
+    if (!options.orderId || !String(options.orderId).trim()) {
       throw new MandateValidationError("Order ID is required for authorization");
     }
+    const orderIdStr = String(options.orderId).trim();
 
     const path = `/v2/checkout/orders/${encodeURIComponent(orderIdStr)}/authorize`;
+    const requestId = options.requestId ?? crypto.randomUUID();
     const headers = new Headers();
     headers.set("Content-Type", "application/json");
-    if (options.requestId) {
-      headers.set("PayPal-Request-Id", options.requestId);
-    }
+    headers.set("PayPal-Request-Id", requestId);
     headers.set("Prefer", "return=representation");
 
     const bodyPayload = options.paymentSource ? { payment_source: options.paymentSource } : {};
@@ -192,6 +212,29 @@ export class OrdersEscrowService {
       );
     }
 
+    if (authRecord.status === "DENIED") {
+      throw new EscrowAuthorizationError(
+        `PayPal payment authorization denied for order: ${orderIdStr}`,
+        {
+          orderId: orderIdStr,
+          authorizationId: authRecord.id,
+          status: authRecord.status,
+          statusDetails: authRecord.status_details,
+        },
+      );
+    }
+
+    if (authRecord.status === "VOIDED" || authRecord.status === "EXPIRED") {
+      throw new EscrowAuthorizationError(
+        `PayPal authorization is not active (status: ${authRecord.status}) for order: ${orderIdStr}`,
+        {
+          orderId: orderIdStr,
+          authorizationId: authRecord.id,
+          status: authRecord.status,
+        },
+      );
+    }
+
     const amount = Money.fromDecimalString(
       authRecord.amount.value,
       authRecord.amount.currency_code,
@@ -205,6 +248,9 @@ export class OrdersEscrowService {
       rawResponse: orderResponse,
     };
 
+    if (authRecord.status_details) {
+      authorizationObj.statusDetails = authRecord.status_details;
+    }
     if (authRecord.expiration_time) {
       authorizationObj.expirationTime = authRecord.expiration_time;
     }
@@ -219,7 +265,10 @@ export class OrdersEscrowService {
    * Retrieves order state by OrderId.
    */
   public async getOrder(orderId: string | ReturnType<typeof asOrderId>): Promise<EscrowOrder> {
-    const orderIdStr = String(orderId);
+    if (!orderId || !String(orderId).trim()) {
+      throw new MandateValidationError("Order ID is required to fetch order state");
+    }
+    const orderIdStr = String(orderId).trim();
     const path = `/v2/checkout/orders/${encodeURIComponent(orderIdStr)}`;
 
     const res = await this.authClient.fetchAuthenticated(path, {
@@ -239,19 +288,31 @@ export class OrdersEscrowService {
     }
 
     const orderResponse = parseResult.data;
-    const amountVal = orderResponse.purchase_units?.[0]?.amount;
+    const firstUnit = orderResponse.purchase_units?.[0];
+    const amountVal = firstUnit?.amount;
     const amount = amountVal
       ? Money.fromDecimalString(amountVal.value, amountVal.currency_code)
       : Money.zero("USD");
 
-    return {
+    const orderObj: EscrowOrder = {
       orderId: asOrderId(orderResponse.id),
       status: orderResponse.status,
       amount,
-      referenceId: orderResponse.purchase_units?.[0]?.reference_id,
+      referenceId: firstUnit?.reference_id,
       links: orderResponse.links ?? [],
       rawResponse: orderResponse,
     };
+
+    if (firstUnit?.custom_id) {
+      orderObj.customId = firstUnit.custom_id;
+    }
+
+    const firstAuth = firstUnit?.payments?.authorizations?.[0];
+    if (firstAuth?.id) {
+      orderObj.authorizationId = asAuthorizationId(firstAuth.id);
+    }
+
+    return orderObj;
   }
 
   private formatItems(
@@ -262,6 +323,10 @@ export class OrdersEscrowService {
     const itemsWire: PayPalItemWire[] = [];
 
     for (const item of items) {
+      if (!item.name || typeof item.name !== "string" || !item.name.trim()) {
+        throw new MandateValidationError("Item name must be a non-empty string", { item });
+      }
+
       const unitMoney = parseMoneyInput(item.unitAmount);
       if (unitMoney.currency !== expectedCurrency) {
         throw new MandateValidationError(
@@ -270,9 +335,26 @@ export class OrdersEscrowService {
         );
       }
 
-      const qty =
-        typeof item.quantity === "number" ? item.quantity : Number.parseInt(item.quantity, 10);
-      if (!Number.isInteger(qty) || qty <= 0) {
+      if (!unitMoney.isPositive()) {
+        throw new MandateValidationError(
+          `Item unit amount must be positive, received: ${unitMoney.toDecimalString()} ${unitMoney.currency} for item "${item.name}"`,
+          { itemName: item.name, unitAmount: unitMoney.toDecimalString() },
+        );
+      }
+
+      let qty: number;
+      if (typeof item.quantity === "number") {
+        qty = item.quantity;
+      } else if (typeof item.quantity === "string" && /^\d+$/.test(item.quantity.trim())) {
+        qty = Number.parseInt(item.quantity.trim(), 10);
+      } else {
+        throw new MandateValidationError(
+          `Item quantity must be a positive integer, received: ${item.quantity}`,
+          { itemName: item.name, quantity: item.quantity },
+        );
+      }
+
+      if (!Number.isInteger(qty) || qty <= 0 || !Number.isSafeInteger(qty)) {
         throw new MandateValidationError(
           `Item quantity must be a positive integer, received: ${item.quantity}`,
           { itemName: item.name, quantity: item.quantity },
@@ -283,7 +365,7 @@ export class OrdersEscrowService {
       itemTotal = itemTotal.add(itemLineTotal);
 
       const wireItem: PayPalItemWire = {
-        name: item.name,
+        name: item.name.trim(),
         quantity: String(qty),
         unit_amount: {
           currency_code: unitMoney.currency,
@@ -317,8 +399,25 @@ export class OrdersEscrowService {
     }
 
     const errorName = typeof parsed.name === "string" ? parsed.name : undefined;
-    const message = typeof parsed.message === "string" ? parsed.message : defaultMessage;
     const debugId = typeof parsed.debug_id === "string" ? parsed.debug_id : undefined;
+
+    const detailsList = Array.isArray(parsed.details) ? parsed.details : [];
+    const detailsSummary = detailsList
+      .map((d: unknown) => {
+        if (typeof d === "object" && d !== null) {
+          const item = d as Record<string, unknown>;
+          const issue = typeof item.issue === "string" ? item.issue : "";
+          const desc = typeof item.description === "string" ? item.description : "";
+          if (issue && desc) return `${issue}: ${desc}`;
+          return issue || desc;
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("; ");
+
+    const baseMessage = typeof parsed.message === "string" ? parsed.message : defaultMessage;
+    const message = detailsSummary ? `${baseMessage} (${detailsSummary})` : baseMessage;
 
     if (res.status === 401 || res.status === 403) {
       throw new UnauthorizedError(message, {
