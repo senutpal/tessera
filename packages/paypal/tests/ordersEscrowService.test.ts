@@ -7,7 +7,7 @@ import {
   UnauthorizedError,
 } from "@tessera/core";
 import { describe, expect, it, vi } from "vitest";
-import { OrdersEscrowService, PayPalAuthClient, PayPalClient } from "../index.js";
+import { OrdersEscrowService, PayPalApiError, PayPalAuthClient, PayPalClient } from "../index.js";
 
 function createMockOrderResponse(overrides: Record<string, unknown> = {}) {
   return {
@@ -747,5 +747,35 @@ describe("OrdersEscrowService (Orders v2 Authorize Engine)", () => {
     await expect(service.authorizeOrder({ orderId: "UNAPPROVED_ORDER" })).rejects.toThrow(
       /ORDER_NOT_APPROVED: Payer has not approved the Order for payment/,
     );
+  });
+
+  it("throws PayPalApiError with debugId from header when order endpoint returns 500", async () => {
+    const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+      }
+      return new Response("Internal Server Error HTML page", {
+        status: 500,
+        headers: { "paypal-debug-id": "order_500_dbg" },
+      });
+    });
+
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+    const service = new OrdersEscrowService(auth);
+
+    const orderPromise = service.createEscrowOrder({
+      amount: Money.fromDecimalString("100.00", "USD"),
+    });
+    await expect(orderPromise).rejects.toThrow(PayPalApiError);
+    await expect(orderPromise).rejects.toMatchObject({
+      name: "PayPalApiError",
+      httpStatus: 500,
+      debugId: "order_500_dbg",
+    });
   });
 });

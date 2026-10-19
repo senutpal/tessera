@@ -104,6 +104,7 @@ export class AuthorizationVoidService {
         type: "ESCROW_HOLD_VOIDED",
         authorizationId: asAuthorizationId(authIdStr),
         timestamp: voidedAt,
+        requestId,
       };
       if (options.orderId) {
         event.orderId = asOrderId(options.orderId);

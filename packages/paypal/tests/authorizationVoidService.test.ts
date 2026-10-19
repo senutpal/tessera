@@ -12,6 +12,7 @@ import {
   AuthorizationVoidService,
   type EscrowEventSink,
   type EscrowHoldVoidedEvent,
+  PayPalApiError,
   PayPalAuthClient,
   PayPalClient,
 } from "../index.js";
@@ -378,6 +379,7 @@ describe("AuthorizationVoidService (Escrow Release/Void Engine)", () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.amount?.currency).toBe("EUR");
     expect(events[0]?.amount?.toDecimalString()).toBe("149.50");
+    expect(events[0]?.requestId).toBe(result.requestId);
   });
 
   it("enriches error messages with PayPal issues and descriptions on void failure", async () => {
@@ -413,6 +415,34 @@ describe("AuthorizationVoidService (Escrow Release/Void Engine)", () => {
     ).rejects.toThrow(
       /PREVIOUSLY_CAPTURED: Authorization has been previously captured and cannot be voided\./,
     );
+  });
+
+  it("throws PayPalApiError with debugId from header when void endpoint returns 500", async () => {
+    const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const urlStr = String(url);
+      if (urlStr.includes("/v1/oauth2/token")) {
+        return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+      }
+      return new Response("Internal Server Error HTML page", {
+        status: 500,
+        headers: { "paypal-debug-id": "void_500_dbg" },
+      });
+    });
+
+    const auth = new PayPalAuthClient({
+      clientId: "id",
+      clientSecret: "secret",
+      customFetch: mockFetch as unknown as typeof fetch,
+    });
+    const voidService = new AuthorizationVoidService(auth);
+
+    const voidPromise = voidService.voidAuthorization({ authorizationId: "0VF52814937998046" });
+    await expect(voidPromise).rejects.toThrow(PayPalApiError);
+    await expect(voidPromise).rejects.toMatchObject({
+      name: "PayPalApiError",
+      httpStatus: 500,
+      debugId: "void_500_dbg",
+    });
   });
 
   it("returns successful void result with eventEmitError when eventSink throws", async () => {

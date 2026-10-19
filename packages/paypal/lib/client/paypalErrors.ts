@@ -10,7 +10,13 @@ export async function throwPayPalError(
   defaultMessage: string,
   unprocessableFactory: (message: string, details: Record<string, unknown>) => Error,
 ): Promise<never> {
-  const errorText = await res.text();
+  let errorText = "";
+  try {
+    errorText = await res.text();
+  } catch {
+    errorText = "";
+  }
+
   let parsed: Record<string, unknown> = {};
   try {
     parsed = JSON.parse(errorText) as Record<string, unknown>;
@@ -18,8 +24,17 @@ export async function throwPayPalError(
     parsed = { rawBody: errorText };
   }
 
-  const errorName = typeof parsed.name === "string" ? parsed.name : undefined;
-  const debugId = typeof parsed.debug_id === "string" ? parsed.debug_id : undefined;
+  const errorName =
+    typeof parsed.name === "string"
+      ? parsed.name
+      : typeof parsed.error === "string"
+        ? parsed.error
+        : undefined;
+
+  const debugId =
+    typeof parsed.debug_id === "string"
+      ? parsed.debug_id
+      : (res.headers?.get?.("paypal-debug-id") ?? undefined);
 
   const detailsList = Array.isArray(parsed.details) ? parsed.details : [];
   const detailsSummary = detailsList
@@ -36,7 +51,12 @@ export async function throwPayPalError(
     .filter(Boolean)
     .join("; ");
 
-  const baseMessage = typeof parsed.message === "string" ? parsed.message : defaultMessage;
+  const baseMessage =
+    typeof parsed.message === "string"
+      ? parsed.message
+      : typeof parsed.error_description === "string"
+        ? parsed.error_description
+        : defaultMessage;
   const message = detailsSummary ? `${baseMessage} (${detailsSummary})` : baseMessage;
 
   if (res.status === 401 || res.status === 403) {
