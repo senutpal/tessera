@@ -103,6 +103,25 @@ describe("TrackingStateMachine (Ticket 07.2)", () => {
       const res = await sm.transition(delivered, delivered);
       expect(res.status).toBe(ShipmentMilestoneStatus.DELIVERED);
     });
+
+    it("rejects transition when current and incoming shipment identity mismatch", async () => {
+      const sm = new TrackingStateMachine();
+      const current = makeMilestone(ShipmentMilestoneStatus.SHIPPED, {
+        transactionId: asTransactionId("TX_A"),
+        trackingNumber: "TRACK_A",
+      });
+      const incomingDiffTx = makeMilestone(ShipmentMilestoneStatus.IN_TRANSIT, {
+        transactionId: asTransactionId("TX_B"),
+        trackingNumber: "TRACK_A",
+      });
+      const incomingDiffTrack = makeMilestone(ShipmentMilestoneStatus.IN_TRANSIT, {
+        transactionId: asTransactionId("TX_A"),
+        trackingNumber: "TRACK_B",
+      });
+
+      await expect(sm.transition(current, incomingDiffTx)).rejects.toThrow(ConflictError);
+      await expect(sm.transition(current, incomingDiffTrack)).rejects.toThrow(ConflictError);
+    });
   });
 
   describe("Delivery Event Emission", () => {
@@ -211,13 +230,44 @@ describe("TrackingStateMachine (Ticket 07.2)", () => {
       expect(result.recommendation).toBe("PROCEED");
     });
 
-    it("throws CarrierTrackingError if an invalid date string is provided", () => {
+    it("throws CarrierTrackingError if an invalid date string is provided for shipmentCreatedAt", () => {
       const sm = new TrackingStateMachine();
       expect(() =>
         sm.checkSlaStatus({
           shipmentCreatedAt: "THIS_IS_NOT_A_VALID_DATE",
         }),
       ).toThrow(CarrierTrackingError);
+    });
+
+    it("throws CarrierTrackingError if an invalid date string is provided for currentTimestamp", () => {
+      const sm = new TrackingStateMachine();
+      expect(() =>
+        sm.checkSlaStatus({
+          shipmentCreatedAt: Date.now(),
+          currentTimestamp: "THIS_IS_NOT_A_VALID_DATE",
+        }),
+      ).toThrow(CarrierTrackingError);
+    });
+
+    it("preserves numeric currentTimestamp of 0 without treating it as undefined", () => {
+      const sm = new TrackingStateMachine({ slaWindowMs: 1000 });
+      // shipmentCreatedAt: 0, currentTimestamp: 0 -> elapsed: 0, not breached
+      const result = sm.checkSlaStatus({
+        shipmentCreatedAt: 0,
+        currentTimestamp: 0,
+      });
+      expect(result.elapsedMs).toBe(0);
+      expect(result.isBreached).toBe(false);
+
+      // shipmentCreatedAt: 0, currentTimestamp: 2000 -> elapsed: 2000 > 1000 -> breached
+      const breachedResult = sm.checkSlaStatus({
+        shipmentCreatedAt: 0,
+        currentTimestamp: 2000,
+        lastMilestone: ShipmentMilestoneStatus.IN_TRANSIT,
+      });
+      expect(breachedResult.elapsedMs).toBe(2000);
+      expect(breachedResult.isBreached).toBe(true);
+      expect(breachedResult.recommendation).toBe("SLA_BREACH_VOID_REQUIRED");
     });
   });
 });
