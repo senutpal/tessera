@@ -173,7 +173,7 @@ export interface ShipmentMilestone {
   carrierNameOther?: string | undefined;
   status: ShipmentMilestoneStatus;
   rawStatus: PayPalTrackingStatus;
-  carrierProofTimestamp: string;
+  carrierProofTimestamp?: string | undefined;
   trackingUrl?: string | undefined;
   trackingNumberValidated?: boolean | undefined;
   rawTracker?: Record<string, unknown> | undefined;

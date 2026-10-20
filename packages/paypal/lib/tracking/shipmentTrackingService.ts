@@ -20,14 +20,10 @@ import {
 const MAX_BATCH_TRACKERS = 20;
 
 export class ShipmentTrackingService {
-  private readonly eventSink?: TrackingEventSink | undefined;
-
   constructor(
     private readonly authClient: PayPalAuthClient,
-    options: { eventSink?: TrackingEventSink | undefined } = {},
-  ) {
-    this.eventSink = options.eventSink;
-  }
+    _options: { eventSink?: TrackingEventSink | undefined } = {},
+  ) {}
 
   /**
    * Registers physical shipment tracking numbers with PayPal Shipping Tracking v1 API
@@ -191,9 +187,18 @@ export class ShipmentTrackingService {
     }
 
     const tracker = parsed.data;
-    const status = this.normalizeStatus(tracker.status);
-    const proofTimestamp =
-      tracker.last_updated_time ?? tracker.shipment_date ?? new Date().toISOString();
+    const status = this.normalizeStatus(tracker.status, {
+      trackingNumberValidated: tracker.tracking_number_validated,
+      shipmentUploader: tracker.shipment_uploader,
+    });
+    const proofTimestamp = tracker.last_updated_time ?? tracker.shipment_date;
+
+    if (!proofTimestamp && status === ShipmentMilestoneStatus.DELIVERED) {
+      throw new CarrierTrackingError(
+        `PayPal tracker ${id} reports DELIVERED without a carrier timestamp`,
+        { id },
+      );
+    }
 
     const milestone: ShipmentMilestone = {
       transactionId: asTransactionId(tracker.transaction_id),
@@ -208,37 +213,34 @@ export class ShipmentTrackingService {
       rawTracker: tracker as Record<string, unknown>,
     };
 
-    if (status === ShipmentMilestoneStatus.DELIVERED && this.eventSink) {
-      try {
-        await this.eventSink.emit({
-          type: "SHIPMENT_DELIVERED",
-          transactionId: milestone.transactionId,
-          trackingNumber: milestone.trackingNumber,
-          carrier: milestone.carrier,
-          status: ShipmentMilestoneStatus.DELIVERED,
-          carrierProofTimestamp: milestone.carrierProofTimestamp,
-          rawTracker: milestone.rawTracker,
-          timestamp: new Date().toISOString(),
-        });
-      } catch {
-        // Query succeeded; event emission failure does not fail the read operation
-      }
-    }
-
     return milestone;
   }
 
   /**
    * Normalizes PayPal tracking status enum into the core domain's ShipmentMilestoneStatus.
    */
-  public normalizeStatus(rawStatus: string): ShipmentMilestoneStatus {
+  public normalizeStatus(
+    rawStatus: string,
+    options?: {
+      trackingNumberValidated?: boolean | undefined;
+      shipmentUploader?: string | undefined;
+    },
+  ): ShipmentMilestoneStatus {
     const upper = String(rawStatus ?? "")
       .trim()
       .toUpperCase();
     switch (upper) {
       case "DELIVERED":
-      case "COMPLETED":
+      case "COMPLETED": {
+        if (options !== undefined) {
+          const isValidated = options.trackingNumberValidated === true;
+          const isMerchantUpload = options.shipmentUploader === "MERCHANT";
+          if (!isValidated || (isMerchantUpload && !isValidated)) {
+            return ShipmentMilestoneStatus.IN_TRANSIT;
+          }
+        }
         return ShipmentMilestoneStatus.DELIVERED;
+      }
 
       case "IN_TRANSIT":
       case "IN_PROCESS":
