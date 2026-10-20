@@ -8,7 +8,14 @@ export { PayPalClient } from "./lib/client/paypalClient.js";
 
 // Escrow Services
 export { AuthorizationVoidService } from "./lib/orders/authorizationVoidService.js";
+export { EscrowCaptureService } from "./lib/orders/escrowCaptureService.js";
 export { OrdersEscrowService } from "./lib/orders/ordersEscrowService.js";
+export { ShipmentTrackingService } from "./lib/tracking/shipmentTrackingService.js";
+export {
+  DEFAULT_TRACKING_SLA_WINDOW_MS,
+  TrackingStateMachine,
+  type TrackingStateMachineOptions,
+} from "./lib/tracking/trackingStateMachine.js";
 // Schemas & Types
 export {
   type AuthorizeOrderOptions,
@@ -46,6 +53,39 @@ export {
   PayPalTimeoutError,
   type VoidAuthorizationOptions,
 } from "./lib/types/orders.js";
+// Tracking & Capture Types, Schemas & Domain Events
+export {
+  type BatchTrackersInput,
+  type BatchTrackersResult,
+  type CaptureEventSink,
+  type CreateTrackerInput,
+  type EscrowCaptureOptions,
+  type EscrowCaptureResult,
+  type EscrowReleasedEvent,
+  type PayPalBatchTrackerCollection,
+  PayPalBatchTrackerCollectionSchema,
+  type PayPalCaptureResponse,
+  PayPalCaptureResponseSchema,
+  type PayPalCaptureStatus,
+  PayPalCaptureStatusSchema,
+  type PayPalShipmentDirection,
+  PayPalShipmentDirectionSchema,
+  type PayPalShipmentUploader,
+  PayPalShipmentUploaderSchema,
+  type PayPalTrackerIdentifier,
+  PayPalTrackerIdentifierSchema,
+  type PayPalTrackerItem,
+  PayPalTrackerItemSchema,
+  type PayPalTrackingNumberType,
+  PayPalTrackingNumberTypeSchema,
+  type PayPalTrackingStatus,
+  PayPalTrackingStatusSchema,
+  type ShipmentDeliveredEvent,
+  type ShipmentMilestone,
+  type SlaStatusResult,
+  type SupervisorOverride,
+  type TrackingEventSink,
+} from "./lib/types/tracking.js";
 // Webhook Types, Schemas & Domain Errors
 export {
   type ClearinghouseAuthorizationCreatedEvent,
@@ -115,6 +155,15 @@ import type {
   VoidAuthorizationOptions,
 } from "./lib/types/orders.js";
 import type {
+  BatchTrackersInput,
+  BatchTrackersResult,
+  CaptureEventSink,
+  EscrowCaptureOptions,
+  EscrowCaptureResult,
+  ShipmentMilestone,
+  TrackingEventSink,
+} from "./lib/types/tracking.js";
+import type {
   WebhookProcessingResult,
   WebhookRequest,
   WebhookVerificationResult,
@@ -170,6 +219,43 @@ export async function voidAuthorization(
 ): Promise<EscrowVoidResult> {
   const client = new PayPalClient(config, clientOptions);
   return client.voidAuthorization(options);
+}
+
+/**
+ * High-level helper to register batch shipment tracking info with PayPal Tracking v1.
+ */
+export async function registerShipmentTracking(
+  config: PayPalConfig,
+  input: BatchTrackersInput,
+  clientOptions?: { trackingEventSink?: TrackingEventSink | undefined },
+): Promise<BatchTrackersResult> {
+  const client = new PayPalClient(config, clientOptions);
+  return client.registerShipmentTracking(input);
+}
+
+/**
+ * High-level helper to query shipment tracking milestone info from PayPal Tracking v1.
+ */
+export async function getShipmentTracking(
+  config: PayPalConfig,
+  transactionIdOrTrackerId: string,
+  trackingNumber?: string,
+  clientOptions?: { trackingEventSink?: TrackingEventSink | undefined },
+): Promise<ShipmentMilestone> {
+  const client = new PayPalClient(config, clientOptions);
+  return client.getShipmentTracking(transactionIdOrTrackerId, trackingNumber);
+}
+
+/**
+ * High-level helper to capture an authorized payment hold from escrow, strictly gated on delivery.
+ */
+export async function captureEscrow(
+  config: PayPalConfig,
+  options: EscrowCaptureOptions,
+  clientOptions?: { captureEventSink?: CaptureEventSink | undefined },
+): Promise<EscrowCaptureResult> {
+  const client = new PayPalClient(config, clientOptions);
+  return client.captureEscrow(options);
 }
 
 let defaultVerifier: WebhookSignatureVerifier | undefined;
