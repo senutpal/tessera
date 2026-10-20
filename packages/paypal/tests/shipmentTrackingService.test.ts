@@ -351,7 +351,7 @@ describe("ShipmentTrackingService (Ticket 07.1)", () => {
       await expect(service.getTracker("NON_EXISTENT_TRACKER")).rejects.toThrow(NotFoundError);
     });
 
-    it("emits ShipmentDeliveredEvent when queried status is DELIVERED", async () => {
+    it("does not emit events from read-only getTracker query", async () => {
       const mockSink: TrackingEventSink = {
         emit: vi.fn(),
       };
@@ -366,6 +366,7 @@ describe("ShipmentTrackingService (Ticket 07.1)", () => {
             createMockTrackerResponse({
               status: "DELIVERED",
               last_updated_time: "2026-10-22T18:00:00Z",
+              tracking_number_validated: true,
             }),
           ),
           { status: 200 },
@@ -379,16 +380,71 @@ describe("ShipmentTrackingService (Ticket 07.1)", () => {
       });
 
       const service = new ShipmentTrackingService(authClient, { eventSink: mockSink });
-      await service.getTracker("8374928374-1Z9999999999999999");
+      const milestone = await service.getTracker("8374928374-1Z9999999999999999");
 
-      expect(mockSink.emit).toHaveBeenCalledTimes(1);
-      expect(mockSink.emit).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "SHIPMENT_DELIVERED",
-          status: ShipmentMilestoneStatus.DELIVERED,
-          carrierProofTimestamp: "2026-10-22T18:00:00Z",
-        }),
+      expect(milestone.status).toBe(ShipmentMilestoneStatus.DELIVERED);
+      expect(mockSink.emit).not.toHaveBeenCalled();
+    });
+
+    it("throws CarrierTrackingError when DELIVERED tracker lacks carrier timestamps", async () => {
+      const mockFetch = vi.fn(async (url: string | URL | Request) => {
+        const urlStr = String(url);
+        if (urlStr.includes("/v1/oauth2/token")) {
+          return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+        }
+        return new Response(
+          JSON.stringify(
+            createMockTrackerResponse({
+              status: "DELIVERED",
+              last_updated_time: undefined,
+              shipment_date: undefined,
+              tracking_number_validated: true,
+            }),
+          ),
+          { status: 200 },
+        );
+      });
+
+      const authClient = new PayPalAuthClient({
+        clientId: "CLIENT_ID",
+        clientSecret: "CLIENT_SECRET",
+        customFetch: mockFetch as unknown as typeof fetch,
+      });
+
+      const service = new ShipmentTrackingService(authClient);
+      await expect(service.getTracker("8374928374-1Z9999999999999999")).rejects.toThrow(
+        CarrierTrackingError,
       );
+    });
+
+    it("downgrades DELIVERED status to IN_TRANSIT when tracking number is not carrier-validated", async () => {
+      const mockFetch = vi.fn(async (url: string | URL | Request) => {
+        const urlStr = String(url);
+        if (urlStr.includes("/v1/oauth2/token")) {
+          return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+        }
+        return new Response(
+          JSON.stringify(
+            createMockTrackerResponse({
+              status: "DELIVERED",
+              last_updated_time: "2026-10-22T18:00:00Z",
+              tracking_number_validated: false,
+              shipment_uploader: "MERCHANT",
+            }),
+          ),
+          { status: 200 },
+        );
+      });
+
+      const authClient = new PayPalAuthClient({
+        clientId: "CLIENT_ID",
+        clientSecret: "CLIENT_SECRET",
+        customFetch: mockFetch as unknown as typeof fetch,
+      });
+
+      const service = new ShipmentTrackingService(authClient);
+      const milestone = await service.getTracker("8374928374-1Z9999999999999999");
+      expect(milestone.status).toBe(ShipmentMilestoneStatus.IN_TRANSIT);
     });
   });
 
