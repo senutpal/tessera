@@ -218,7 +218,7 @@ export interface EscrowCaptureResult {
   capturedAt: string;
   requestId: string;
   releaseTrigger: "CARRIER_DELIVERY_PROOF" | "SUPERVISOR_OVERRIDE";
-  clearinghouseState: ClearinghouseState.SETTLED;
+  clearinghouseState: ClearinghouseState;
   rawResponse: PayPalCaptureResponse;
   eventEmitError?: string | undefined;
 }

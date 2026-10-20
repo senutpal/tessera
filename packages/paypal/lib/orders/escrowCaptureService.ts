@@ -40,9 +40,22 @@ export class EscrowCaptureService {
     }
 
     // 1. Delivery Milestone Gate Verification
+    const proof = options.deliveryProof ?? options.milestone;
+    const expectedTxId = options.transactionId ? String(options.transactionId).trim() : undefined;
+    const proofAuthId = options.deliveryProof?.authorizationId;
+    const proofMatchesAuthorization =
+      !!proof &&
+      (!proofAuthId || String(proofAuthId) === authIdRaw) &&
+      !!expectedTxId &&
+      String(proof.transactionId) === expectedTxId;
+
+    const isValidatedProof =
+      options.deliveryProof !== undefined || options.milestone?.trackingNumberValidated === true;
+
     const isDeliveryVerified =
-      options.deliveryProof?.status === ShipmentMilestoneStatus.DELIVERED ||
-      options.milestone?.status === ShipmentMilestoneStatus.DELIVERED;
+      proof?.status === ShipmentMilestoneStatus.DELIVERED &&
+      proofMatchesAuthorization &&
+      isValidatedProof;
 
     const isSupervisorOverride = Boolean(options.supervisorOverride);
 
@@ -50,11 +63,12 @@ export class EscrowCaptureService {
       const currentStatus = options.deliveryProof?.status ?? options.milestone?.status ?? "UNKNOWN";
       throw new EscrowCaptureError(
         `Escrow capture refused: Shipment delivery is unverified (current milestone status: ${currentStatus}). ` +
-          "Automated escrow fund release requires verified carrier DELIVERED milestone or supervisor override.",
+          "Automated escrow fund release requires verified carrier DELIVERED milestone with matching transactionId/authorizationId, or supervisor override.",
         {
           authorizationId: authIdRaw,
           currentStatus,
           mandateId: options.mandateId,
+          transactionId: options.transactionId,
         },
       );
     }
@@ -70,10 +84,20 @@ export class EscrowCaptureService {
     }
 
     // 2. Deterministic Idempotency Key
+    if (options.finalCapture === false && !options.requestId) {
+      throw new MandateValidationError(
+        "requestId is required for partial (non-final) escrow captures.",
+        { authorizationId: authIdRaw },
+      );
+    }
+
     const requestId =
       options.requestId ??
       (options.mandateId
-        ? `capture-mandate-${String(options.mandateId).replace(/[^a-zA-Z0-9-_]/g, "")}`
+        ? `capture-${authIdRaw.replace(/[^a-zA-Z0-9-_]/g, "")}-${String(options.mandateId).replace(/[^a-zA-Z0-9-_]/g, "")}`.slice(
+            0,
+            108,
+          )
         : crypto.randomUUID());
 
     // 3. Prepare Capture Request Body
@@ -127,13 +151,14 @@ export class EscrowCaptureService {
     }
 
     const captureData = parsed.data;
-    if (captureData.status === "DECLINED" || captureData.status === "FAILED") {
+    if (captureData.status !== "COMPLETED" && captureData.status !== "PENDING") {
       throw new EscrowCaptureError(
-        `PayPal capture rejected with terminal failure status: ${captureData.status}`,
+        `PayPal capture returned non-capturable status: ${captureData.status}`,
         { authorizationId: authIdRaw, captureId: captureData.id, status: captureData.status },
       );
     }
 
+    const isSettled = captureData.status === "COMPLETED";
     const capturedAmount = Money.fromDecimalString(
       captureData.amount.value,
       captureData.amount.currency_code,
@@ -144,23 +169,25 @@ export class EscrowCaptureService {
     const result: EscrowCaptureResult = {
       authorizationId: asAuthorizationId(authIdRaw),
       captureId: asCaptureId(captureData.id),
-      status: captureData.status === "COMPLETED" ? "SETTLED" : (captureData.status as "PENDING"),
+      status: isSettled ? "SETTLED" : "PENDING",
       amount: capturedAmount,
       capturedAt,
       requestId,
       releaseTrigger,
-      clearinghouseState: ClearinghouseState.SETTLED,
+      clearinghouseState: isSettled
+        ? ClearinghouseState.SETTLED
+        : ClearinghouseState.FULFILLED_DELIVERED,
       rawResponse: captureData,
     };
 
     // 4. Emit Clearinghouse EscrowReleasedEvent
-    if (this.eventSink) {
+    if (this.eventSink && isSettled) {
       const releaseEvent: EscrowReleasedEvent = {
         type: "ESCROW_RELEASED",
         authorizationId: asAuthorizationId(authIdRaw),
         captureId: asCaptureId(captureData.id),
         amount: capturedAmount,
-        status: captureData.status === "COMPLETED" ? "SETTLED" : "COMPLETED",
+        status: "SETTLED",
         capturedAt,
         requestId,
         releaseTrigger,

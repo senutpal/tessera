@@ -1,4 +1,5 @@
 import {
+  asAuthorizationId,
   asMandateId,
   asTransactionId,
   ClearinghouseState,
@@ -53,7 +54,7 @@ function createMockCaptureResponse(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function createDeliveredMilestone(): ShipmentMilestone {
+function createDeliveredMilestone(overrides: Partial<ShipmentMilestone> = {}): ShipmentMilestone {
   return {
     transactionId: asTransactionId("TX_98765"),
     trackingNumber: "1Z9999999999",
@@ -61,10 +62,14 @@ function createDeliveredMilestone(): ShipmentMilestone {
     status: ShipmentMilestoneStatus.DELIVERED,
     rawStatus: "DELIVERED",
     carrierProofTimestamp: "2026-10-20T15:30:00Z",
+    trackingNumberValidated: true,
+    ...overrides,
   };
 }
 
-function createDeliveredEvent(): ShipmentDeliveredEvent {
+function createDeliveredEvent(
+  overrides: Partial<ShipmentDeliveredEvent> = {},
+): ShipmentDeliveredEvent {
   return {
     type: "SHIPMENT_DELIVERED",
     transactionId: asTransactionId("TX_98765"),
@@ -73,7 +78,9 @@ function createDeliveredEvent(): ShipmentDeliveredEvent {
     status: ShipmentMilestoneStatus.DELIVERED,
     carrierProofTimestamp: "2026-10-20T15:30:00Z",
     mandateId: asMandateId("mandate-procure-1"),
+    authorizationId: asAuthorizationId("0VF52814937998046"),
     timestamp: "2026-10-20T15:30:00Z",
+    ...overrides,
   };
 }
 
@@ -159,6 +166,71 @@ describe("EscrowCaptureService (Ticket 07.3)", () => {
         }),
       ).rejects.toThrow(MandateValidationError);
     });
+
+    it("refuses capture when options.transactionId is omitted with delivered milestone", async () => {
+      const authClient = new PayPalAuthClient({
+        clientId: "CLIENT_ID",
+        clientSecret: "CLIENT_SECRET",
+      });
+      const service = new EscrowCaptureService(authClient);
+
+      await expect(
+        service.captureEscrow({
+          authorizationId: "0VF52814937998046",
+          milestone: createDeliveredMilestone(),
+        }),
+      ).rejects.toThrow(EscrowCaptureError);
+    });
+
+    it("refuses capture when milestone transactionId mismatches options.transactionId", async () => {
+      const authClient = new PayPalAuthClient({
+        clientId: "CLIENT_ID",
+        clientSecret: "CLIENT_SECRET",
+      });
+      const service = new EscrowCaptureService(authClient);
+
+      await expect(
+        service.captureEscrow({
+          authorizationId: "0VF52814937998046",
+          transactionId: asTransactionId("WRONG_TX_ID"),
+          milestone: createDeliveredMilestone({ transactionId: asTransactionId("TX_98765") }),
+        }),
+      ).rejects.toThrow(EscrowCaptureError);
+    });
+
+    it("refuses capture when deliveryProof authorizationId mismatches capture authorizationId", async () => {
+      const authClient = new PayPalAuthClient({
+        clientId: "CLIENT_ID",
+        clientSecret: "CLIENT_SECRET",
+      });
+      const service = new EscrowCaptureService(authClient);
+
+      await expect(
+        service.captureEscrow({
+          authorizationId: "AUTH_EXPECTED",
+          transactionId: asTransactionId("TX_98765"),
+          deliveryProof: createDeliveredEvent({
+            authorizationId: asAuthorizationId("AUTH_DIFFERENT"),
+          }),
+        }),
+      ).rejects.toThrow(EscrowCaptureError);
+    });
+
+    it("refuses capture when milestone tracking number is not validated", async () => {
+      const authClient = new PayPalAuthClient({
+        clientId: "CLIENT_ID",
+        clientSecret: "CLIENT_SECRET",
+      });
+      const service = new EscrowCaptureService(authClient);
+
+      await expect(
+        service.captureEscrow({
+          authorizationId: "0VF52814937998046",
+          transactionId: asTransactionId("TX_98765"),
+          milestone: createDeliveredMilestone({ trackingNumberValidated: false }),
+        }),
+      ).rejects.toThrow(EscrowCaptureError);
+    });
   });
 
   describe("Successful Escrow Capture Execution", () => {
@@ -192,6 +264,7 @@ describe("EscrowCaptureService (Ticket 07.3)", () => {
       const service = new EscrowCaptureService(authClient);
       const result = await service.captureEscrow({
         authorizationId: "0VF52814937998046",
+        transactionId: asTransactionId("TX_98765"),
         milestone: createDeliveredMilestone(),
         amount: Money.fromDecimalString("149.99", "USD"),
         invoiceId: "INV-2026-001",
@@ -204,7 +277,9 @@ describe("EscrowCaptureService (Ticket 07.3)", () => {
       expect(capturedMethod).toBe("POST");
       expect(capturedHeaders?.get("Content-Type")).toBe("application/json");
       expect(capturedHeaders?.get("Prefer")).toBe("return=representation");
-      expect(capturedHeaders?.get("PayPal-Request-Id")).toBe("capture-mandate-mandate-order-88");
+      expect(capturedHeaders?.get("PayPal-Request-Id")).toBe(
+        "capture-0VF52814937998046-mandate-order-88",
+      );
       expect(capturedBody).toMatchObject({
         final_capture: true,
         amount: {
@@ -245,6 +320,7 @@ describe("EscrowCaptureService (Ticket 07.3)", () => {
       const service = new EscrowCaptureService(authClient);
       const result = await service.captureEscrow({
         authorizationId: "0VF52814937998046",
+        transactionId: asTransactionId("TX_98765"),
         deliveryProof: createDeliveredEvent(),
       });
 
@@ -327,7 +403,7 @@ describe("EscrowCaptureService (Ticket 07.3)", () => {
       const service = new EscrowCaptureService(authClient, { eventSink: mockSink });
       await service.captureEscrow({
         authorizationId: "0VF52814937998046",
-        milestone: createDeliveredMilestone(),
+        milestone: createDeliveredMilestone({ transactionId: asTransactionId("tx-77") }),
         mandateId: asMandateId("mandate-99"),
         transactionId: asTransactionId("tx-77"),
       });
@@ -343,6 +419,42 @@ describe("EscrowCaptureService (Ticket 07.3)", () => {
       expect(emitted.releaseTrigger).toBe("CARRIER_DELIVERY_PROOF");
       expect(emitted.amount.toDecimalString()).toBe("149.99");
       expect(emitted.status).toBe("SETTLED");
+    });
+
+    it("handles PENDING capture status without emitting ESCROW_RELEASED and sets FULFILLED_DELIVERED", async () => {
+      const mockSink: CaptureEventSink = {
+        emit: vi.fn(),
+      };
+
+      const mockFetch = vi.fn(async (url: string | URL | Request) => {
+        const urlStr = String(url);
+        if (urlStr.includes("/v1/oauth2/token")) {
+          return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+        }
+        if (urlStr.includes("/v2/payments/authorizations/")) {
+          return new Response(JSON.stringify(createMockCaptureResponse({ status: "PENDING" })), {
+            status: 200,
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      });
+
+      const authClient = new PayPalAuthClient({
+        clientId: "CLIENT_ID",
+        clientSecret: "CLIENT_SECRET",
+        customFetch: mockFetch as unknown as typeof fetch,
+      });
+
+      const service = new EscrowCaptureService(authClient, { eventSink: mockSink });
+      const result = await service.captureEscrow({
+        authorizationId: "0VF52814937998046",
+        transactionId: asTransactionId("TX_98765"),
+        milestone: createDeliveredMilestone(),
+      });
+
+      expect(result.status).toBe("PENDING");
+      expect(result.clearinghouseState).toBe(ClearinghouseState.FULFILLED_DELIVERED);
+      expect(mockSink.emit).not.toHaveBeenCalled();
     });
 
     it("gracefully catches sink emit failures without failing the PayPal capture", async () => {
@@ -370,11 +482,64 @@ describe("EscrowCaptureService (Ticket 07.3)", () => {
       const service = new EscrowCaptureService(authClient, { eventSink: failingSink });
       const result = await service.captureEscrow({
         authorizationId: "0VF52814937998046",
+        transactionId: asTransactionId("TX_98765"),
         milestone: createDeliveredMilestone(),
       });
 
       expect(result.status).toBe("SETTLED");
       expect(result.eventEmitError).toContain("Clearinghouse DB connection timed out");
+    });
+  });
+
+  describe("Deterministic Idempotency Key & Partial Captures", () => {
+    it("rejects partial capture when requestId is omitted", async () => {
+      const authClient = new PayPalAuthClient({
+        clientId: "CLIENT_ID",
+        clientSecret: "CLIENT_SECRET",
+      });
+      const service = new EscrowCaptureService(authClient);
+
+      await expect(
+        service.captureEscrow({
+          authorizationId: "0VF52814937998046",
+          transactionId: asTransactionId("TX_98765"),
+          milestone: createDeliveredMilestone(),
+          finalCapture: false,
+        }),
+      ).rejects.toThrow(MandateValidationError);
+    });
+
+    it("allows partial capture when requestId is explicitly provided", async () => {
+      let capturedRequestId: string | null = null;
+      const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        const urlStr = String(url);
+        if (urlStr.includes("/v1/oauth2/token")) {
+          return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+        }
+        if (urlStr.includes("/v2/payments/authorizations/")) {
+          capturedRequestId = new Headers(init?.headers).get("PayPal-Request-Id");
+          return new Response(JSON.stringify(createMockCaptureResponse()), { status: 200 });
+        }
+        return new Response("Not found", { status: 404 });
+      });
+
+      const authClient = new PayPalAuthClient({
+        clientId: "CLIENT_ID",
+        clientSecret: "CLIENT_SECRET",
+        customFetch: mockFetch as unknown as typeof fetch,
+      });
+
+      const service = new EscrowCaptureService(authClient);
+      const result = await service.captureEscrow({
+        authorizationId: "0VF52814937998046",
+        transactionId: asTransactionId("TX_98765"),
+        milestone: createDeliveredMilestone(),
+        finalCapture: false,
+        requestId: "partial-req-custom-99",
+      });
+
+      expect(result.status).toBe("SETTLED");
+      expect(capturedRequestId).toBe("partial-req-custom-99");
     });
   });
 
@@ -403,6 +568,38 @@ describe("EscrowCaptureService (Ticket 07.3)", () => {
       await expect(
         service.captureEscrow({
           authorizationId: "0VF52814937998046",
+          transactionId: asTransactionId("TX_98765"),
+          milestone: createDeliveredMilestone(),
+        }),
+      ).rejects.toThrow(EscrowCaptureError);
+    });
+
+    it("throws EscrowCaptureError when PayPal returns unexpected status PARTIALLY_REFUNDED", async () => {
+      const mockFetch = vi.fn(async (url: string | URL | Request) => {
+        const urlStr = String(url);
+        if (urlStr.includes("/v1/oauth2/token")) {
+          return new Response(JSON.stringify(createMockTokenResponse()), { status: 200 });
+        }
+        if (urlStr.includes("/v2/payments/authorizations/")) {
+          return new Response(
+            JSON.stringify(createMockCaptureResponse({ status: "PARTIALLY_REFUNDED" })),
+            { status: 200 },
+          );
+        }
+        return new Response("Not found", { status: 404 });
+      });
+
+      const authClient = new PayPalAuthClient({
+        clientId: "CLIENT_ID",
+        clientSecret: "CLIENT_SECRET",
+        customFetch: mockFetch as unknown as typeof fetch,
+      });
+
+      const service = new EscrowCaptureService(authClient);
+      await expect(
+        service.captureEscrow({
+          authorizationId: "0VF52814937998046",
+          transactionId: asTransactionId("TX_98765"),
           milestone: createDeliveredMilestone(),
         }),
       ).rejects.toThrow(EscrowCaptureError);
@@ -434,6 +631,7 @@ describe("EscrowCaptureService (Ticket 07.3)", () => {
       await expect(
         service.captureEscrow({
           authorizationId: "EXPIRED_AUTH_ID",
+          transactionId: asTransactionId("TX_98765"),
           milestone: createDeliveredMilestone(),
         }),
       ).rejects.toThrow(EscrowCaptureError);
@@ -461,6 +659,7 @@ describe("EscrowCaptureService (Ticket 07.3)", () => {
 
       const result = await client.captureEscrow({
         authorizationId: "AUTH_CLIENT_TEST",
+        transactionId: asTransactionId("TX_98765"),
         milestone: createDeliveredMilestone(),
       });
       expect(result.status).toBe("SETTLED");
@@ -487,6 +686,7 @@ describe("EscrowCaptureService (Ticket 07.3)", () => {
         },
         {
           authorizationId: "AUTH_STANDALONE",
+          transactionId: asTransactionId("TX_98765"),
           milestone: createDeliveredMilestone(),
         },
       );
