@@ -89,6 +89,19 @@ export class TrackingStateMachine {
     const currentStatus = current?.status;
     const targetStatus = incoming.status;
 
+    if (
+      current &&
+      (current.transactionId !== incoming.transactionId ||
+        current.trackingNumber !== incoming.trackingNumber)
+    ) {
+      throw new ConflictError("Shipment milestone identity mismatch", {
+        currentTransactionId: current.transactionId,
+        incomingTransactionId: incoming.transactionId,
+        currentTrackingNumber: current.trackingNumber,
+        incomingTrackingNumber: incoming.trackingNumber,
+      });
+    }
+
     if (!this.isValidTransition(currentStatus, targetStatus)) {
       throw new ConflictError(
         `Invalid shipment milestone transition: cannot transition from ${currentStatus} to ${targetStatus}`,
@@ -107,6 +120,16 @@ export class TrackingStateMachine {
       currentStatus !== ShipmentMilestoneStatus.DELIVERED;
 
     if (isNewDelivery && this.eventSink) {
+      if (!incoming.carrierProofTimestamp) {
+        throw new CarrierTrackingError(
+          "Incoming DELIVERED milestone is missing carrierProofTimestamp",
+          {
+            transactionId: incoming.transactionId,
+            trackingNumber: incoming.trackingNumber,
+          },
+        );
+      }
+
       const deliveredEvent: ShipmentDeliveredEvent = {
         type: "SHIPMENT_DELIVERED",
         transactionId: incoming.transactionId,
@@ -147,11 +170,18 @@ export class TrackingStateMachine {
       });
     }
 
-    const nowMs = params.currentTimestamp
-      ? typeof params.currentTimestamp === "number"
-        ? params.currentTimestamp
-        : new Date(params.currentTimestamp).getTime()
-      : Date.now();
+    const nowMs =
+      params.currentTimestamp === undefined
+        ? Date.now()
+        : typeof params.currentTimestamp === "number"
+          ? params.currentTimestamp
+          : new Date(params.currentTimestamp).getTime();
+
+    if (Number.isNaN(nowMs)) {
+      throw new CarrierTrackingError("Invalid currentTimestamp provided to SLA check", {
+        currentTimestamp: params.currentTimestamp,
+      });
+    }
 
     const elapsedMs = Math.max(0, nowMs - createdMs);
     const remainingMs = Math.max(0, this.slaWindowMs - elapsedMs);
