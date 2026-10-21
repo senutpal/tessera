@@ -105,20 +105,8 @@ export const TransactionDetailDrawer: React.FC<TransactionDetailDrawerProps> = (
                 Mandate Inspector
               </span>
             </div>
-            <h2 className="text-sm font-mono font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+            <h2 className="text-sm font-mono font-bold text-zinc-900 dark:text-zinc-100">
               {record.transactionId}
-              <button
-                type="button"
-                onClick={() => copyToClipboard(record.transactionId, "txId")}
-                className="text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors"
-                title="Copy Transaction ID"
-              >
-                {copiedKey === "txId" ? (
-                  <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                ) : (
-                  <Copy className="w-3.5 h-3.5" />
-                )}
-              </button>
             </h2>
           </div>
 
