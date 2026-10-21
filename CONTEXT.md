@@ -27,6 +27,9 @@ A verified tracking checkpoint ingested from **PayPal Shipment Tracking v1** (`S
 ### Dispute Evidence Pack
 A cryptographically verifiable bundle of carrier tracking logs, signed AP2 mandates, and Channel3 quote snapshots submitted to PayPal **Disputes API v1** (`/v1/customer/disputes/{id}/provide-evidence`) upon shipment failure or merchant dispute.
 
+### Autonomous Dispute Resolution & Claim Acceptance
+An automated clearinghouse remediation pipeline evaluating customer dispute states. Autonomously accepts claims (`/v1/customer/disputes/{id}/accept-claim`) to immediately refund buyers when carrier proof confirms items are non-deliverable or verified damaged, or escalates unresolved disputes to PayPal review (`/v1/customer/disputes/{id}/escalate`) when carrier proof verifies successful delivery and buyer dispute SLA has elapsed.
+
 ### Rolling Velocity Window
 A sliding-window time accumulator (1-hour, 24-hour, 30-day) tracking cumulative expenditure per agent ID or merchant domain to prevent runaway spending loops.
 
