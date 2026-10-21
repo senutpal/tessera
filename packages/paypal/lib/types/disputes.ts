@@ -413,6 +413,7 @@ export interface EvidenceSubmissionResult {
 
 export interface AcceptClaimOptions {
   disputeId: string;
+  transactionId?: string | TransactionId | undefined;
   note?: string | undefined;
   acceptClaimType?: PayPalAcceptClaimType | undefined;
   refundAmount?: Money | undefined;
@@ -428,6 +429,7 @@ export interface DisputeResolutionResult {
 
 export interface EscalateDisputeOptions {
   disputeId: string;
+  transactionId?: string | TransactionId | undefined;
   note: string;
   buyerEscalationReason?: string | undefined;
 }
