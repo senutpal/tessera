@@ -1,7 +1,7 @@
 import { MemoryTransport } from "../transports/memoryTransport.js";
 import { RedisTransport, type RedisTransportOptions } from "../transports/redisTransport.js";
 import type { EventBusTransport } from "../transports/transport.js";
-import type { DomainEvent, DomainEventType } from "../types/events.js";
+import { type DomainEvent, DomainEventSchema, type DomainEventType } from "../types/events.js";
 
 export interface EventBusOptions extends RedisTransportOptions {
   channelPrefix?: string;
@@ -47,7 +47,7 @@ export class EventBus {
     return this.transport.isConnected;
   }
 
-  async connect(): Promise<void> {
+  connect(): Promise<void> {
     if (this.connectPromise) {
       return this.connectPromise;
     }
@@ -82,8 +82,13 @@ export class EventBus {
           fullChannel,
           (rawMessage) => {
             try {
-              const parsed = JSON.parse(rawMessage) as DomainEvent;
-              this.dispatchDomainEvent(parsed);
+              const json = JSON.parse(rawMessage);
+              const result = DomainEventSchema.safeParse(json);
+              if (!result.success) {
+                console.error("[EventBus] Invalid domain event received:", result.error);
+                return;
+              }
+              this.dispatchDomainEvent(result.data);
             } catch (err) {
               console.error("[EventBus] Failed to parse incoming domain event JSON:", err);
             }
@@ -188,8 +193,13 @@ export class EventBus {
     const fullChannel = this.getFullChannelName(channel);
     const unsub = await this.transport.subscribe(fullChannel, (raw) => {
       try {
-        const parsed = JSON.parse(raw) as DomainEvent;
-        const res = handler(parsed);
+        const json = JSON.parse(raw);
+        const result = DomainEventSchema.safeParse(json);
+        if (!result.success) {
+          console.error(`[EventBus] Invalid domain event on channel ${channel}:`, result.error);
+          return;
+        }
+        const res = handler(result.data);
         if (res && typeof (res as Promise<void>).catch === "function") {
           (res as Promise<void>).catch((err) => {
             console.error(`[EventBus] Error in channel subscriber for ${channel}:`, err);

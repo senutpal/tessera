@@ -16,8 +16,10 @@ export class RedisTransport implements EventBusTransport {
   private memoryFallback: MemoryTransport | undefined = undefined;
   private fallbackActive = false;
   private fallbackPromise: Promise<void> | undefined = undefined;
+  private connectPromise: Promise<void> | undefined = undefined;
   private connected = false;
   private channelHandlers = new Map<string, Set<MessageHandler>>();
+  private memoryUnsubs = new Map<string, Map<MessageHandler, () => Promise<void>>>();
 
   constructor(private readonly options: RedisTransportOptions = {}) {}
 
@@ -36,7 +38,24 @@ export class RedisTransport implements EventBusTransport {
     return this.fallbackActive;
   }
 
-  async connect(): Promise<void> {
+  connect(): Promise<void> {
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
+    this.connectPromise = (async () => {
+      try {
+        await this.doConnect();
+      } finally {
+        this.connectPromise = undefined;
+      }
+    })();
+    return this.connectPromise;
+  }
+
+  private async doConnect(): Promise<void> {
+    if (this.isConnected) {
+      return;
+    }
     const fallbackToMemory = this.options.fallbackToMemory ?? true;
     const redisUrl = this.options.redisUrl || process.env.REDIS_URL;
 
@@ -87,13 +106,17 @@ export class RedisTransport implements EventBusTransport {
         );
       });
 
+      const redisConnectPromise = Promise.all([this.pubClient.connect(), this.subClient.connect()]);
+      redisConnectPromise.catch(() => {});
+
       try {
-        await Promise.race([
-          Promise.all([this.pubClient.connect(), this.subClient.connect()]),
-          timeoutPromise,
-        ]);
+        await Promise.race([redisConnectPromise, timeoutPromise]);
       } finally {
         if (timerId) clearTimeout(timerId);
+      }
+
+      if (this.fallbackActive || !this.subClient) {
+        return;
       }
 
       this.subClient.on("message", (channel, message) => {
@@ -101,7 +124,15 @@ export class RedisTransport implements EventBusTransport {
         if (handlers) {
           for (const handler of handlers) {
             try {
-              void handler(message);
+              const res = handler(message);
+              if (res && typeof (res as Promise<void>).catch === "function") {
+                (res as Promise<void>).catch((err) => {
+                  console.error(
+                    `[RedisTransport] Error dispatching message on channel ${channel}:`,
+                    err,
+                  );
+                });
+              }
             } catch (err) {
               console.error(
                 `[RedisTransport] Error dispatching message on channel ${channel}:`,
@@ -159,8 +190,16 @@ export class RedisTransport implements EventBusTransport {
 
       // Re-register any existing channel handlers in memory transport
       for (const [channel, handlers] of this.channelHandlers.entries()) {
+        let chanMap = this.memoryUnsubs.get(channel);
+        if (!chanMap) {
+          chanMap = new Map();
+          this.memoryUnsubs.set(channel, chanMap);
+        }
         for (const handler of handlers) {
-          await this.memoryFallback.subscribe(channel, handler);
+          if (!chanMap.has(handler)) {
+            const unsub = await this.memoryFallback.subscribe(channel, handler);
+            chanMap.set(handler, unsub);
+          }
         }
       }
     })();
@@ -217,14 +256,18 @@ export class RedisTransport implements EventBusTransport {
     }
     handlers.add(handler);
 
-    let memoryUnsub: (() => Promise<void>) | undefined;
-
     if (this.fallbackActive) {
       if (this.fallbackPromise) {
         await this.fallbackPromise;
       }
       if (this.memoryFallback) {
-        memoryUnsub = await this.memoryFallback.subscribe(channel, handler);
+        let chanMap = this.memoryUnsubs.get(channel);
+        if (!chanMap) {
+          chanMap = new Map();
+          this.memoryUnsubs.set(channel, chanMap);
+        }
+        const unsub = await this.memoryFallback.subscribe(channel, handler);
+        chanMap.set(handler, unsub);
       }
     } else if (this.connected && this.subClient) {
       await this.subClient.subscribe(channel);
@@ -243,8 +286,16 @@ export class RedisTransport implements EventBusTransport {
           }
         }
       }
-      if (memoryUnsub) {
-        await memoryUnsub();
+      const chanMap = this.memoryUnsubs.get(channel);
+      if (chanMap) {
+        const memUnsub = chanMap.get(handler);
+        if (memUnsub) {
+          chanMap.delete(handler);
+          if (chanMap.size === 0) {
+            this.memoryUnsubs.delete(channel);
+          }
+          await memUnsub();
+        }
       }
     };
   }
@@ -252,6 +303,7 @@ export class RedisTransport implements EventBusTransport {
   async close(): Promise<void> {
     this.connected = false;
     this.channelHandlers.clear();
+    this.memoryUnsubs.clear();
 
     if (this.memoryFallback) {
       await this.memoryFallback.close();

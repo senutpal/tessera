@@ -105,11 +105,14 @@ export const DisputeResolvedEventSchema = z.object({
 });
 export type DisputeResolvedEvent = z.infer<typeof DisputeResolvedEventSchema>;
 
-export type DomainEvent =
-  | MandateVerifiedEvent
-  | EscrowLockedEvent
-  | TrackingUpdatedEvent
-  | DisputeOpenedEvent
-  | DisputeResolvedEvent;
+export const DomainEventSchema = z.discriminatedUnion("type", [
+  MandateVerifiedEventSchema,
+  EscrowLockedEventSchema,
+  TrackingUpdatedEventSchema,
+  DisputeOpenedEventSchema,
+  DisputeResolvedEventSchema,
+]);
+
+export type DomainEvent = z.infer<typeof DomainEventSchema>;
 
 export type DomainEventType = DomainEvent["type"];

@@ -443,4 +443,107 @@ describe("RedisTransport & Graceful Fallback", () => {
     await expect(bus.close()).rejects.toThrow("Unsubscribe failed");
     expect(bus.isConnected).toBe(false);
   });
+
+  it("drops invalid or malformed domain event payloads without dispatching to subscribers", async () => {
+    const memory = new MemoryTransport();
+    const bus = new EventBus({ transport: memory });
+    await bus.connect();
+
+    const received: DomainEvent[] = [];
+    bus.subscribe("*", (evt) => {
+      received.push(evt);
+    });
+
+    // Directly publish a malformed payload on the underlying transport channel
+    await memory.publish(
+      "tessera.clearinghouse.events",
+      JSON.stringify({ type: "UnknownEventType", eventId: "e-bad" }),
+    );
+    // Malformed data missing required fields
+    await memory.publish(
+      "tessera.clearinghouse.events",
+      JSON.stringify({
+        type: "MandateVerified",
+        eventId: "e-bad-2",
+        data: { transactionId: "tx-incomplete" },
+      }),
+    );
+    // Non-JSON string
+    await memory.publish("tessera.clearinghouse.events", "not-json-content");
+
+    // Now publish a valid event through bus
+    await bus.publish({
+      eventId: "e-valid",
+      type: "MandateVerified",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-valid",
+        mandateId: "m1",
+        agentId: "a1",
+        merchantDomain: "test.com",
+        amount: 500,
+        currency: "USD",
+        riskScore: 5,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+      },
+    });
+
+    expect(received).toHaveLength(1);
+    expect(received[0].eventId).toBe("e-valid");
+
+    await bus.close();
+  });
+
+  it("shares single in-flight connection promise during concurrent RedisTransport.connect()", async () => {
+    const redisTransport = new RedisTransport({
+      redisUrl: "redis://127.0.0.1:54321",
+      connectTimeoutMs: 100,
+      fallbackToMemory: true,
+    });
+
+    const [p1, p2, p3] = [
+      redisTransport.connect(),
+      redisTransport.connect(),
+      redisTransport.connect(),
+    ];
+
+    expect(p1).toBe(p2);
+    expect(p2).toBe(p3);
+
+    await Promise.all([p1, p2, p3]);
+    expect(redisTransport.isConnected).toBe(true);
+    await redisTransport.close();
+  });
+
+  it("unsubscribes cleanly after fallback without leaking memory listeners", async () => {
+    const redisTransport = new RedisTransport({
+      redisUrl: "redis://127.0.0.1:54321",
+      connectTimeoutMs: 100,
+      fallbackToMemory: true,
+    });
+
+    // Pre-subscribe before connect triggers fallback
+    const received: string[] = [];
+    const unsub = await redisTransport.subscribe("pre-fallback-chan", (msg) => {
+      received.push(msg);
+    });
+
+    // Trigger connect which activates memory fallback
+    await redisTransport.connect();
+    expect(redisTransport.isFallbackActive).toBe(true);
+
+    // Publish in fallback mode: should be received
+    await redisTransport.publish("pre-fallback-chan", "msg-1");
+    expect(received).toEqual(["msg-1"]);
+
+    // Unsubscribe after fallback
+    await unsub();
+
+    // Publish again: should NOT be received
+    await redisTransport.publish("pre-fallback-chan", "msg-2");
+    expect(received).toEqual(["msg-1"]);
+
+    await redisTransport.close();
+  });
 });

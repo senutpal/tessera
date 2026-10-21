@@ -33,6 +33,7 @@ export {
   type DisputeResolvedEvent,
   DisputeResolvedEventSchema,
   type DomainEvent,
+  DomainEventSchema,
   type DomainEventType,
   type EscrowLockedData,
   type EscrowLockedEvent,
