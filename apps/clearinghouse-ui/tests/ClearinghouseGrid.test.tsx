@@ -808,7 +808,7 @@ describe("AG Grid Enterprise Clearinghouse Dashboard UI", () => {
       expect(themeBtn).toBeInTheDocument();
     });
 
-    it("renders ultra-clean minimal header lockup without legacy subtext", () => {
+    it("renders ultra-clean minimal header lockup without legacy subtext or version chips", () => {
       render(<App />);
 
       // Verify TESSERA brand name and logo image
@@ -817,9 +817,29 @@ describe("AG Grid Enterprise Clearinghouse Dashboard UI", () => {
       expect(brandLogo).toHaveAttribute("src", "/logo.png");
       expect(screen.getByText("TESSERA")).toBeInTheDocument();
 
-      // Verify removed cluttered branding elements are not rendered
+      // Verify removed cluttered branding elements and version chips are not rendered
       expect(screen.queryByText(/clearinghouse institutional suite/i)).not.toBeInTheDocument();
       expect(screen.queryByText(/autonomous spending control/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/ap2 v1/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/v0\.1/i)).not.toBeInTheDocument();
+    });
+
+    it("renders TransactionDetailDrawer without version badge or chip", () => {
+      render(
+        <TransactionDetailDrawer
+          record={mockRecordLow}
+          onClose={vi.fn()}
+          onApprove={vi.fn()}
+          onVoid={vi.fn()}
+          onDispute={vi.fn()}
+        />,
+      );
+
+      // Verify Mandate Inspector header is present
+      expect(screen.getByText("Mandate Inspector")).toBeInTheDocument();
+      // Verify no version badge (such as AP2 v1 or v0.1) is rendered
+      expect(screen.queryByText(/ap2 v1/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/v0\.1/i)).not.toBeInTheDocument();
     });
   });
 });
