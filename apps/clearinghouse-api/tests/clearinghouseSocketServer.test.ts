@@ -476,4 +476,29 @@ describe("ClearinghouseSocketServer", () => {
     // Verify it was emitted exactly once, not twice
     expect(disconnectCount).toBe(1);
   });
+
+  it("rejects incoming frames exceeding maxPayload (64 KiB)", async () => {
+    server = createClearinghouseSocketServer({
+      port: 0,
+      host: "127.0.0.1",
+    });
+    await server.start();
+    port = server.port;
+
+    const client = await createClient();
+    await client.nextMessage();
+
+    const closedPromise = new Promise<{ code: number; reason: string }>((resolve) => {
+      client.ws.on("close", (code, reason) => {
+        resolve({ code, reason: reason.toString() });
+      });
+    });
+
+    const oversizedPayload = "x".repeat(70 * 1024);
+    client.ws.send(oversizedPayload);
+
+    const closeInfo = await closedPromise;
+    expect([1006, 1009]).toContain(closeInfo.code);
+    expect(server.clientCount).toBe(0);
+  });
 });
