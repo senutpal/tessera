@@ -439,10 +439,10 @@ export const App: React.FC = () => {
           <div className="p-5 rounded-xl bg-white dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col justify-between gap-3 h-full hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-150">
             <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400 text-[11px] font-mono uppercase tracking-wider">
               <span className="flex items-center gap-1.5 font-semibold">
-                <TrendingUp className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <TrendingUp className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500" />
                 Total Monitored Escrow
               </span>
-              <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400" />
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/80 dark:bg-emerald-400/80" />
             </div>
 
             <div className="flex items-center justify-between gap-2">
@@ -487,13 +487,13 @@ export const App: React.FC = () => {
           >
             <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400 text-[11px] font-mono uppercase tracking-wider">
               <span className="flex items-center gap-1.5 font-semibold">
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                <AlertTriangle className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500" />
                 Pending HITL Approvals
               </span>
               {stats.pendingHitl > 0 ? (
-                <span className="w-2 h-2 rounded-full bg-amber-500 dark:bg-amber-400 animate-pulse" />
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500/80 dark:bg-amber-400/80 animate-pulse" />
               ) : (
-                <span className="w-2 h-2 rounded-full bg-zinc-300 dark:bg-zinc-600" />
+                <span className="w-1.5 h-1.5 rounded-full bg-zinc-300 dark:bg-zinc-600" />
               )}
             </div>
 
@@ -530,13 +530,13 @@ export const App: React.FC = () => {
           >
             <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400 text-[11px] font-mono uppercase tracking-wider">
               <span className="flex items-center gap-1.5 font-semibold">
-                <ShieldAlert className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                <ShieldAlert className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500" />
                 Critical Risk Anomalies
               </span>
               {stats.criticalRisk > 0 ? (
-                <span className="w-2 h-2 rounded-full bg-rose-500 dark:bg-rose-400 animate-pulse" />
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500/80 dark:bg-rose-400/80 animate-pulse" />
               ) : (
-                <span className="w-2 h-2 rounded-full bg-zinc-300 dark:bg-zinc-600" />
+                <span className="w-1.5 h-1.5 rounded-full bg-zinc-300 dark:bg-zinc-600" />
               )}
             </div>
 
@@ -569,10 +569,10 @@ export const App: React.FC = () => {
           <div className="p-5 rounded-xl bg-white dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col justify-between gap-3 h-full hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-150">
             <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400 text-[11px] font-mono uppercase tracking-wider">
               <span className="flex items-center gap-1.5 font-semibold">
-                <Zap className="w-3.5 h-3.5 text-sky-600 dark:text-cyan-400" />
+                <Zap className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500" />
                 Engine Latency SLA
               </span>
-              <span className="w-2 h-2 rounded-full bg-sky-500 dark:bg-cyan-400" />
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-500/80 dark:bg-cyan-400/80" />
             </div>
 
             <div className="flex items-center justify-between gap-2">
