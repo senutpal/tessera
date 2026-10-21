@@ -96,6 +96,7 @@ export class ClearinghouseSocketServer extends EventEmitter {
     this.wss = new WebSocketServer({
       server: this.httpServer,
       path,
+      maxPayload: 64 * 1024,
     });
 
     this.wss.on("connection", (socket: WebSocket, req: IncomingMessage) => {
@@ -199,11 +200,18 @@ export class ClearinghouseSocketServer extends EventEmitter {
     });
 
     socket.on("error", (err) => {
-      this.emit("error", err, session);
+      if (this.listenerCount("client_error") > 0) {
+        this.emit("client_error", err, session);
+      } else if (this.listenerCount("error") > 0) {
+        this.emit("error", err, session);
+      } else {
+        console.error("[ClearinghouseSocketServer] Client socket error:", err);
+      }
       const removed = this.sessionManager.removeSession(sessionId);
       if (removed) {
         this.emit("client_disconnected", session);
       }
+      socket.terminate();
     });
 
     // Immediately hydrate client with state snapshot
