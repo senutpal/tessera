@@ -43,17 +43,9 @@ export async function computeAuditBundleDigest(content: string): Promise<string>
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
   }
-  // Deterministic 64-character hash fallback
-  let h1 = 0x811c9dc5;
-  let h2 = 0x9e3779b9;
-  for (let i = 0; i < content.length; i++) {
-    const ch = content.charCodeAt(i);
-    h1 = Math.imul(h1 ^ ch, 0x01000193);
-    h2 = Math.imul(h2 ^ ch, 0x27d4eb2f);
-  }
-  const s1 = (h1 >>> 0).toString(16).padStart(8, "0");
-  const s2 = (h2 >>> 0).toString(16).padStart(8, "0");
-  return (s1 + s2).repeat(4);
+  throw new Error(
+    "SHA-256 unavailable: Web Crypto requires a secure context (HTTPS or localhost).",
+  );
 }
 
 export async function generateAuditBundle(
@@ -109,23 +101,24 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
     const gridApiRef = useRef<GridApi<ClearinghouseRecord> | null>(null);
     const pendingTransactionsRef = useRef<GridTransaction[]>([]);
 
-    // Redraw rows and headers synchronously when theme switches
+    // Refresh headers synchronously when theme switches
     useEffect(() => {
       if (gridApiRef.current && theme) {
-        gridApiRef.current.redrawRows();
         gridApiRef.current.refreshHeader();
       }
     }, [theme]);
 
     const getGridRecords = useCallback((): ClearinghouseRecord[] => {
-      if (gridApiRef.current) {
+      const api = gridApiRef.current;
+      if (api) {
+        api.flushAsyncTransactions?.();
         const list: ClearinghouseRecord[] = [];
-        gridApiRef.current.forEachNode((node) => {
+        api.forEachNode((node) => {
           if (node.data) {
             list.push(node.data);
           }
         });
-        if (list.length > 0) return list;
+        return list;
       }
       return rowData ?? [];
     }, [rowData]);
@@ -462,6 +455,7 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
               {quickFilter ? (
                 <button
                   type="button"
+                  aria-label="Clear filter"
                   onClick={() => applyQuickFilter("")}
                   className="absolute right-2.5 w-4 h-4 rounded-full flex items-center justify-center text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-[10px] transition-colors"
                 >

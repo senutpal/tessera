@@ -801,10 +801,12 @@ describe("AG Grid Enterprise Clearinghouse Dashboard UI", () => {
       const themeBtn = screen.getByRole("button", { name: /toggle color theme/i });
       expect(themeBtn).toBeInTheDocument();
 
+      const before = document.documentElement.classList.contains("dark");
       // Click to toggle theme
       fireEvent.click(themeBtn);
 
-      // Verify toggle button remains accessible and functional
+      // Verify toggle toggled dark class on html root and button remains accessible
+      expect(document.documentElement.classList.contains("dark")).toBe(!before);
       expect(themeBtn).toBeInTheDocument();
     });
 

@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, Copy, Lock, ShieldCheck, X } from "lucide-react";
 import type React from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ClearinghouseRecord, HitlActionType } from "../types.js";
 import { getRiskLevel } from "../types.js";
@@ -35,11 +35,20 @@ export const TransactionDetailDrawer: React.FC<TransactionDetailDrawerProps> = (
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  const copyToClipboard = useCallback((text: string, key: string) => {
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    },
+    [],
+  );
+
+  const copyToClipboard = useCallback(async (text: string, key: string) => {
     try {
-      navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(text);
       setCopiedKey(key);
-      setTimeout(() => setCopiedKey(null), 1800);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setCopiedKey(null), 1800);
     } catch {
       // fallback
     }
@@ -48,10 +57,16 @@ export const TransactionDetailDrawer: React.FC<TransactionDetailDrawerProps> = (
   if (!record) return null;
 
   const riskTier = getRiskLevel(record.riskScore);
-  const formattedAmount = new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: record.currency || "USD",
-  }).format(record.amount / 100);
+  let formattedAmount: string;
+  try {
+    const fmt = new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: record.currency || "USD",
+    });
+    formattedAmount = fmt.format(record.amount / 100);
+  } catch {
+    formattedAmount = `${(record.amount / 100).toFixed(2)} ${record.currency || "USD"}`;
+  }
 
   const isTerminal =
     record.clearinghouseState === "SETTLED" ||
@@ -134,9 +149,9 @@ export const TransactionDetailDrawer: React.FC<TransactionDetailDrawerProps> = (
               <span className="text-3xl font-semibold font-mono tracking-tight text-zinc-900 dark:text-zinc-100">
                 {formattedAmount}
               </span>
-              <span className="inline-flex items-center gap-1.5 text-[11px] font-mono tracking-tight px-2 py-0.5 rounded-md bg-emerald-500/[0.06] dark:bg-emerald-500/[0.08] text-emerald-700 dark:text-emerald-300 border border-emerald-500/20 dark:border-emerald-500/20 font-medium">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-mono tracking-tight px-2 py-0.5 rounded-md bg-zinc-500/[0.06] dark:bg-zinc-500/[0.08] text-zinc-700 dark:text-zinc-300 border border-zinc-500/20 dark:border-zinc-500/20 font-medium">
                 <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-500 dark:bg-emerald-400 opacity-75" />
-                <span>{record.currency} HOLD</span>
+                <span>{record.currency}</span>
               </span>
             </div>
 
@@ -238,8 +253,10 @@ export const TransactionDetailDrawer: React.FC<TransactionDetailDrawerProps> = (
                   </span>
                   <button
                     type="button"
+                    aria-label="Copy Mandate ID"
                     onClick={() => copyToClipboard(record.mandateId, "mandateId")}
                     className="text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors shrink-0"
+                    title="Copy Mandate ID"
                   >
                     {copiedKey === "mandateId" ? (
                       <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />

@@ -18,6 +18,7 @@ export const App: React.FC = () => {
   const [selectedRecord, setSelectedRecord] = useState<ClearinghouseRecord | null>(null);
   const simTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [seqNumber, setSeqNumber] = useState<number>(112);
+  const seqRef = useRef<number>(112);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("tessera-theme");
@@ -44,17 +45,7 @@ export const App: React.FC = () => {
   }, [theme]);
 
   const toggleTheme = useCallback(() => {
-    setTheme((curr) => {
-      const next = curr === "dark" ? "light" : "dark";
-      if (typeof document !== "undefined") {
-        if (next === "dark") {
-          document.documentElement.classList.add("dark");
-        } else {
-          document.documentElement.classList.remove("dark");
-        }
-      }
-      return next;
-    });
+    setTheme((curr) => (curr === "dark" ? "light" : "dark"));
   }, []);
 
   const showToast = useCallback((msg: string) => {
@@ -180,10 +171,26 @@ export const App: React.FC = () => {
   // Supervisor Action Handlers with optimistic UI updates
   const handleApprove = useCallback(
     async (record: ClearinghouseRecord) => {
+      if (isConnected) {
+        const res = await fetch(
+          `${apiBaseUrl.replace(/\/+$/, "")}/api/v1/mandates/${encodeURIComponent(record.mandateId)}/counter-sign`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              transactionId: record.transactionId,
+              supervisorDecision: "APPROVED",
+              timestamp: new Date().toISOString(),
+            }),
+          },
+        );
+        if (!res.ok) throw new Error(`Counter-sign failed: HTTP ${res.status}`);
+      }
       const updated: ClearinghouseRecord = {
         ...record,
         hitlStatus: "APPROVED",
-        clearinghouseState: "AUTHORIZED_IN_ESCROW",
+        clearinghouseState:
+          record.clearinghouseState === "DISPUTED" ? "DISPUTED" : "AUTHORIZED_IN_ESCROW",
         updatedAt: new Date().toISOString(),
       };
       handleTransaction({ add: [], update: [updated], remove: [] });
@@ -192,11 +199,26 @@ export const App: React.FC = () => {
       );
       showToast(`Counter-signature approved for ${record.transactionId}`);
     },
-    [handleTransaction, showToast],
+    [handleTransaction, isConnected, apiBaseUrl, showToast],
   );
 
   const handleVoid = useCallback(
     async (record: ClearinghouseRecord) => {
+      if (isConnected) {
+        const res = await fetch(
+          `${apiBaseUrl.replace(/\/+$/, "")}/api/v1/mandates/${encodeURIComponent(record.mandateId)}/void`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              transactionId: record.transactionId,
+              reason: "SUPERVISOR_SLA_VOID",
+              timestamp: new Date().toISOString(),
+            }),
+          },
+        );
+        if (!res.ok) throw new Error(`Void failed: HTTP ${res.status}`);
+      }
       const updated: ClearinghouseRecord = {
         ...record,
         clearinghouseState: "VOIDED",
@@ -210,11 +232,26 @@ export const App: React.FC = () => {
       );
       showToast(`Escrow voided for ${record.transactionId}`);
     },
-    [handleTransaction, showToast],
+    [handleTransaction, isConnected, apiBaseUrl, showToast],
   );
 
   const handleDispute = useCallback(
     async (record: ClearinghouseRecord) => {
+      if (isConnected) {
+        const res = await fetch(
+          `${apiBaseUrl.replace(/\/+$/, "")}/api/v1/mandates/${encodeURIComponent(record.mandateId)}/dispute`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              transactionId: record.transactionId,
+              reason: "SUPERVISOR_MANUAL_DISPUTE",
+              timestamp: new Date().toISOString(),
+            }),
+          },
+        );
+        if (!res.ok) throw new Error(`Dispute failed: HTTP ${res.status}`);
+      }
       const updated: ClearinghouseRecord = {
         ...record,
         clearinghouseState: "DISPUTED",
@@ -227,7 +264,7 @@ export const App: React.FC = () => {
       );
       showToast(`Dispute escalation filed for ${record.transactionId}`);
     },
-    [handleTransaction, showToast],
+    [handleTransaction, isConnected, apiBaseUrl, showToast],
   );
 
   // Live streaming delta simulator
@@ -238,61 +275,59 @@ export const App: React.FC = () => {
     }
 
     simTimerRef.current = setInterval(() => {
-      setSeqNumber((prevSeq) => {
-        const nextSeq = prevSeq + 1;
-        const currentRecords = Array.from(recordsRef.current.values());
-        if (currentRecords.length === 0) return nextSeq;
+      seqRef.current += 1;
+      const nextSeq = seqRef.current;
+      setSeqNumber(nextSeq);
+      const currentRecords = Array.from(recordsRef.current.values());
+      if (currentRecords.length === 0) return;
 
-        // Pick a random record to modify or append
-        const target = currentRecords[Math.floor(Math.random() * currentRecords.length)];
-        const deltaType = Math.random();
+      // Pick a random record to modify or append
+      const target = currentRecords[Math.floor(Math.random() * currentRecords.length)];
+      const deltaType = Math.random();
 
-        if (deltaType < 0.6) {
-          // Update existing risk score / amount slightly
-          const scoreDelta = Math.floor(Math.random() * 15) - 7;
-          const newScore = Math.max(1, Math.min(99, target.riskScore + scoreDelta));
-          const updated: ClearinghouseRecord = {
-            ...target,
-            riskScore: newScore,
-            riskTier: newScore <= 30 ? "LOW" : newScore <= 70 ? "ELEVATED" : "CRITICAL_HITL",
-            sequenceNumber: nextSeq,
-            updatedAt: new Date().toISOString(),
-          };
-          handleTransaction({ add: [], update: [updated], remove: [] });
-        } else {
-          // Add a new high-frequency transaction
-          const merchants = [
-            "stripe.com",
-            "openai.com",
-            "aws.amazon.com",
-            "anthropic.com",
-            "google.com",
-          ];
-          const merchant = merchants[Math.floor(Math.random() * merchants.length)];
-          const randomAmount = Math.floor(Math.random() * 50000) * 100 + 10000;
-          const randomScore = Math.floor(Math.random() * 95) + 5;
-          const newTx: ClearinghouseRecord = {
-            transactionId: `tx-stream-${nextSeq}`,
-            mandateId: `man-sim-${nextSeq}`,
-            agentId: `agent-live-${(nextSeq % 5) + 1}`,
-            merchantDomain: merchant,
-            amount: randomAmount,
-            currency: "USD",
-            clearinghouseState: "AUTHORIZED_IN_ESCROW",
-            escrowStatus: "AUTHORIZED_HOLD",
-            riskScore: randomScore,
-            riskTier: randomScore <= 30 ? "LOW" : randomScore <= 70 ? "ELEVATED" : "CRITICAL_HITL",
-            hitlStatus: randomScore > 70 ? "PENDING_APPROVAL" : "NOT_REQUIRED",
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            sequenceNumber: nextSeq,
-            timestampMicros: Date.now() * 1000,
-          };
-          handleTransaction({ add: [newTx], update: [], remove: [] });
-        }
-
-        return nextSeq;
-      });
+      if (deltaType < 0.6) {
+        // Update existing risk score / amount slightly
+        const scoreDelta = Math.floor(Math.random() * 15) - 7;
+        const newScore = Math.max(1, Math.min(99, target.riskScore + scoreDelta));
+        const updated: ClearinghouseRecord = {
+          ...target,
+          riskScore: newScore,
+          riskTier: newScore <= 30 ? "LOW" : newScore <= 70 ? "ELEVATED" : "CRITICAL_HITL",
+          sequenceNumber: nextSeq,
+          updatedAt: new Date().toISOString(),
+        };
+        handleTransaction({ add: [], update: [updated], remove: [] });
+      } else {
+        // Add a new high-frequency transaction
+        const merchants = [
+          "stripe.com",
+          "openai.com",
+          "aws.amazon.com",
+          "anthropic.com",
+          "google.com",
+        ];
+        const merchant = merchants[Math.floor(Math.random() * merchants.length)];
+        const randomAmount = Math.floor(Math.random() * 50000) * 100 + 10000;
+        const randomScore = Math.floor(Math.random() * 95) + 5;
+        const newTx: ClearinghouseRecord = {
+          transactionId: `tx-stream-${nextSeq}`,
+          mandateId: `man-sim-${nextSeq}`,
+          agentId: `agent-live-${(nextSeq % 5) + 1}`,
+          merchantDomain: merchant,
+          amount: randomAmount,
+          currency: "USD",
+          clearinghouseState: "AUTHORIZED_IN_ESCROW",
+          escrowStatus: "AUTHORIZED_HOLD",
+          riskScore: randomScore,
+          riskTier: randomScore <= 30 ? "LOW" : randomScore <= 70 ? "ELEVATED" : "CRITICAL_HITL",
+          hitlStatus: randomScore > 70 ? "PENDING_APPROVAL" : "NOT_REQUIRED",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          sequenceNumber: nextSeq,
+          timestampMicros: Date.now() * 1000,
+        };
+        handleTransaction({ add: [newTx], update: [], remove: [] });
+      }
     }, 1500);
 
     return () => {

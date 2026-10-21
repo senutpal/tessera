@@ -10,7 +10,11 @@
 
 /* Institutional Minimalist Theme Variables */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
 }
 
 body {
