@@ -62,8 +62,6 @@ describe("DisputeResolutionHandler", () => {
   describe("acceptClaim", () => {
     it("successfully accepts dispute claim and issues refund", async () => {
       const fetchSpy = vi.fn();
-      globalThis.fetch = fetchSpy;
-
       fetchSpy.mockResolvedValueOnce(
         new Response(JSON.stringify(createMockTokenResponse()), { status: 200 }),
       );
@@ -78,12 +76,16 @@ describe("DisputeResolutionHandler", () => {
         },
       };
 
-      const auth = new PayPalAuthClient(dummyConfig);
+      const auth = new PayPalAuthClient({
+        ...dummyConfig,
+        customFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = new DisputeResolutionHandler(auth, { eventSink });
 
       const refundAmount = Money.fromDecimalString("89.50", "USD");
       const result = await handler.acceptClaim({
         disputeId: "PP-D-77889",
+        transactionId: "TX-SELLER-77889",
         note: "Accepting buyer claim due to carrier lost package",
         acceptClaimType: "REFUND",
         refundAmount,
@@ -118,6 +120,7 @@ describe("DisputeResolutionHandler", () => {
       if (!ev) throw new Error("Expected event");
       expect(ev.type).toBe("dispute.resolved");
       expect(ev.disputeId).toBe("PP-D-77889");
+      expect(ev.transactionId).toBe("TX-SELLER-77889");
       expect(ev.resolutionAction).toBe("ACCEPT_CLAIM");
       expect(ev.refundAmount?.toDecimalString()).toBe("89.50");
     });
@@ -131,8 +134,6 @@ describe("DisputeResolutionHandler", () => {
 
     it("throws DisputeError when PayPal rejects claim acceptance", async () => {
       const fetchSpy = vi.fn();
-      globalThis.fetch = fetchSpy;
-
       fetchSpy.mockResolvedValueOnce(
         new Response(JSON.stringify(createMockTokenResponse()), { status: 200 }),
       );
@@ -146,7 +147,10 @@ describe("DisputeResolutionHandler", () => {
         ),
       );
 
-      const auth = new PayPalAuthClient(dummyConfig);
+      const auth = new PayPalAuthClient({
+        ...dummyConfig,
+        customFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = new DisputeResolutionHandler(auth);
 
       await expect(handler.acceptClaim({ disputeId: "PP-D-77889" })).rejects.toThrow(DisputeError);
@@ -156,8 +160,6 @@ describe("DisputeResolutionHandler", () => {
   describe("escalateDispute", () => {
     it("successfully escalates dispute to PayPal claim for adjudication", async () => {
       const fetchSpy = vi.fn();
-      globalThis.fetch = fetchSpy;
-
       fetchSpy.mockResolvedValueOnce(
         new Response(JSON.stringify(createMockTokenResponse()), { status: 200 }),
       );
@@ -172,11 +174,15 @@ describe("DisputeResolutionHandler", () => {
         },
       };
 
-      const auth = new PayPalAuthClient(dummyConfig);
+      const auth = new PayPalAuthClient({
+        ...dummyConfig,
+        customFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = new DisputeResolutionHandler(auth, { eventSink });
 
       const result = await handler.escalateDispute({
         disputeId: "PP-D-77889",
+        transactionId: "TX-SELLER-77889",
         note: "Delivery confirmed by carrier tracking; buyer dispute unresolved beyond SLA",
         buyerEscalationReason: "MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
       });
@@ -206,6 +212,7 @@ describe("DisputeResolutionHandler", () => {
       if (!ev) throw new Error("Expected event");
       expect(ev.type).toBe("dispute.escalated");
       expect(ev.disputeId).toBe("PP-D-77889");
+      expect(ev.transactionId).toBe("TX-SELLER-77889");
       expect(ev.reason).toBe("MERCHANDISE_OR_SERVICE_NOT_RECEIVED");
     });
 
@@ -225,8 +232,6 @@ describe("DisputeResolutionHandler", () => {
 
     it("throws DisputeError when PayPal rejects dispute escalation", async () => {
       const fetchSpy = vi.fn();
-      globalThis.fetch = fetchSpy;
-
       fetchSpy.mockResolvedValueOnce(
         new Response(JSON.stringify(createMockTokenResponse()), { status: 200 }),
       );
@@ -240,7 +245,10 @@ describe("DisputeResolutionHandler", () => {
         ),
       );
 
-      const auth = new PayPalAuthClient(dummyConfig);
+      const auth = new PayPalAuthClient({
+        ...dummyConfig,
+        customFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = new DisputeResolutionHandler(auth);
 
       await expect(
@@ -250,8 +258,6 @@ describe("DisputeResolutionHandler", () => {
 
     it("does not fail claim acceptance when event sink throws an error", async () => {
       const fetchSpy = vi.fn();
-      globalThis.fetch = fetchSpy;
-
       fetchSpy.mockResolvedValueOnce(
         new Response(JSON.stringify(createMockTokenResponse()), { status: 200 }),
       );
@@ -265,7 +271,10 @@ describe("DisputeResolutionHandler", () => {
         },
       };
 
-      const auth = new PayPalAuthClient(dummyConfig);
+      const auth = new PayPalAuthClient({
+        ...dummyConfig,
+        customFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = new DisputeResolutionHandler(auth, { eventSink });
 
       const result = await handler.acceptClaim({ disputeId: "PP-D-77889" });
@@ -276,8 +285,6 @@ describe("DisputeResolutionHandler", () => {
   describe("evaluatePolicyAndResolve", () => {
     it("accepts claim immediately when supervisor override is present", async () => {
       const fetchSpy = vi.fn();
-      globalThis.fetch = fetchSpy;
-
       fetchSpy.mockResolvedValueOnce(
         new Response(JSON.stringify(createMockTokenResponse()), { status: 200 }),
       );
@@ -285,7 +292,10 @@ describe("DisputeResolutionHandler", () => {
         new Response(JSON.stringify(createMockSubsequentActionResponse()), { status: 200 }),
       );
 
-      const auth = new PayPalAuthClient(dummyConfig);
+      const auth = new PayPalAuthClient({
+        ...dummyConfig,
+        customFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = new DisputeResolutionHandler(auth);
 
       const dispute = createMockDisputeDomain();
@@ -303,8 +313,6 @@ describe("DisputeResolutionHandler", () => {
 
     it("accepts claim autonomously when item is confirmed non-deliverable", async () => {
       const fetchSpy = vi.fn();
-      globalThis.fetch = fetchSpy;
-
       fetchSpy.mockResolvedValueOnce(
         new Response(JSON.stringify(createMockTokenResponse()), { status: 200 }),
       );
@@ -312,7 +320,10 @@ describe("DisputeResolutionHandler", () => {
         new Response(JSON.stringify(createMockSubsequentActionResponse()), { status: 200 }),
       );
 
-      const auth = new PayPalAuthClient(dummyConfig);
+      const auth = new PayPalAuthClient({
+        ...dummyConfig,
+        customFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = new DisputeResolutionHandler(auth, {
         policy: { autoAcceptNonDeliverable: true },
       });
@@ -328,8 +339,6 @@ describe("DisputeResolutionHandler", () => {
 
     it("accepts claim autonomously when item is verified damaged and autoAcceptDamaged is enabled", async () => {
       const fetchSpy = vi.fn();
-      globalThis.fetch = fetchSpy;
-
       fetchSpy.mockResolvedValueOnce(
         new Response(JSON.stringify(createMockTokenResponse()), { status: 200 }),
       );
@@ -337,7 +346,10 @@ describe("DisputeResolutionHandler", () => {
         new Response(JSON.stringify(createMockSubsequentActionResponse()), { status: 200 }),
       );
 
-      const auth = new PayPalAuthClient(dummyConfig);
+      const auth = new PayPalAuthClient({
+        ...dummyConfig,
+        customFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = new DisputeResolutionHandler(auth, {
         policy: { autoAcceptDamaged: true },
       });
@@ -353,8 +365,6 @@ describe("DisputeResolutionHandler", () => {
 
     it("escalates to PayPal review when item was delivered with proof and buyer SLA expired", async () => {
       const fetchSpy = vi.fn();
-      globalThis.fetch = fetchSpy;
-
       fetchSpy.mockResolvedValueOnce(
         new Response(JSON.stringify(createMockTokenResponse()), { status: 200 }),
       );
@@ -362,7 +372,10 @@ describe("DisputeResolutionHandler", () => {
         new Response(JSON.stringify(createMockSubsequentActionResponse()), { status: 200 }),
       );
 
-      const auth = new PayPalAuthClient(dummyConfig);
+      const auth = new PayPalAuthClient({
+        ...dummyConfig,
+        customFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = new DisputeResolutionHandler(auth);
 
       const dispute = createMockDisputeDomain();
@@ -380,8 +393,6 @@ describe("DisputeResolutionHandler", () => {
 
     it("escalates using autoEscalateAfterSlaMs policy when dispute createTime exceeds threshold", async () => {
       const fetchSpy = vi.fn();
-      globalThis.fetch = fetchSpy;
-
       fetchSpy.mockResolvedValueOnce(
         new Response(JSON.stringify(createMockTokenResponse()), { status: 200 }),
       );
@@ -389,7 +400,10 @@ describe("DisputeResolutionHandler", () => {
         new Response(JSON.stringify(createMockSubsequentActionResponse()), { status: 200 }),
       );
 
-      const auth = new PayPalAuthClient(dummyConfig);
+      const auth = new PayPalAuthClient({
+        ...dummyConfig,
+        customFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = new DisputeResolutionHandler(auth, {
         policy: { autoEscalateAfterSlaMs: 3600_000 },
       });
@@ -408,8 +422,6 @@ describe("DisputeResolutionHandler", () => {
 
     it("does not serialize zero USD refund_amount when dispute amount is zero", async () => {
       const fetchSpy = vi.fn();
-      globalThis.fetch = fetchSpy;
-
       fetchSpy.mockResolvedValueOnce(
         new Response(JSON.stringify(createMockTokenResponse()), { status: 200 }),
       );
@@ -417,7 +429,10 @@ describe("DisputeResolutionHandler", () => {
         new Response(JSON.stringify(createMockSubsequentActionResponse()), { status: 200 }),
       );
 
-      const auth = new PayPalAuthClient(dummyConfig);
+      const auth = new PayPalAuthClient({
+        ...dummyConfig,
+        customFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = new DisputeResolutionHandler(auth);
 
       const dispute = createMockDisputeDomain({
@@ -434,7 +449,11 @@ describe("DisputeResolutionHandler", () => {
     });
 
     it("recommends evidence submission when seller response is pending and tracking proof is available", async () => {
-      const auth = new PayPalAuthClient(dummyConfig);
+      const fetchSpy = vi.fn();
+      const auth = new PayPalAuthClient({
+        ...dummyConfig,
+        customFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = new DisputeResolutionHandler(auth);
 
       const dispute = createMockDisputeDomain({
@@ -447,10 +466,15 @@ describe("DisputeResolutionHandler", () => {
 
       expect(decision.action).toBe("SUBMIT_EVIDENCE");
       expect(decision.reason).toContain("Tracking proof available");
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
 
     it("returns NONE when dispute does not match automated action criteria", async () => {
-      const auth = new PayPalAuthClient(dummyConfig);
+      const fetchSpy = vi.fn();
+      const auth = new PayPalAuthClient({
+        ...dummyConfig,
+        customFetch: fetchSpy as unknown as typeof fetch,
+      });
       const handler = new DisputeResolutionHandler(auth);
 
       const dispute = createMockDisputeDomain({
@@ -459,13 +483,17 @@ describe("DisputeResolutionHandler", () => {
 
       const decision = await handler.evaluatePolicyAndResolve(dispute);
       expect(decision.action).toBe("NONE");
+      expect(fetchSpy).not.toHaveBeenCalled();
     });
   });
 
   describe("High-level API helpers and PayPalClient integration", () => {
     it("acceptDisputeClaim, escalateDispute, and evaluateDisputePolicy helpers delegate correctly", async () => {
       const fetchSpy = vi.fn();
-      globalThis.fetch = fetchSpy;
+      const testConfig = {
+        ...dummyConfig,
+        customFetch: fetchSpy as unknown as typeof fetch,
+      };
 
       // Token + Accept Claim
       fetchSpy.mockResolvedValueOnce(
@@ -475,7 +503,7 @@ describe("DisputeResolutionHandler", () => {
         new Response(JSON.stringify(createMockSubsequentActionResponse()), { status: 200 }),
       );
 
-      const resAccept = await acceptDisputeClaim(dummyConfig, {
+      const resAccept = await acceptDisputeClaim(testConfig, {
         disputeId: "PP-D-77889",
       });
       expect(resAccept.status).toBe("CLAIM_ACCEPTED");
@@ -488,7 +516,7 @@ describe("DisputeResolutionHandler", () => {
         new Response(JSON.stringify(createMockSubsequentActionResponse()), { status: 200 }),
       );
 
-      const resEscalate = await escalateDispute(dummyConfig, {
+      const resEscalate = await escalateDispute(testConfig, {
         disputeId: "PP-D-77889",
         note: "Escalating dispute due to unresolved dispute",
       });
@@ -503,7 +531,7 @@ describe("DisputeResolutionHandler", () => {
       );
 
       const dispute = createMockDisputeDomain();
-      const decision = await evaluateDisputePolicy(dummyConfig, dispute, {
+      const decision = await evaluateDisputePolicy(testConfig, dispute, {
         supervisorOverride: true,
       });
       expect(decision.action).toBe("ACCEPT_CLAIM");
