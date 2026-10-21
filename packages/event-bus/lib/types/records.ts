@@ -70,11 +70,18 @@ export interface GridDeltaBatch {
   transaction: GridTransaction;
 }
 
+let lastMicros = 0;
+
 /**
- * Returns epoch timestamp in microseconds with high precision.
+ * Returns epoch timestamp in microseconds with high precision and strict monotonicity guarantee.
  */
 export function getMicrosecondTimestamp(): number {
   const nowMs = Date.now();
   const hrMicros = Number((process.hrtime.bigint() / 1000n) % 1000n);
-  return nowMs * 1000 + hrMicros;
+  let micros = nowMs * 1000 + hrMicros;
+  if (micros <= lastMicros) {
+    micros = lastMicros + 1;
+  }
+  lastMicros = micros;
+  return micros;
 }

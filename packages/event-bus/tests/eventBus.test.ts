@@ -319,4 +319,61 @@ describe("RedisTransport & Graceful Fallback", () => {
 
     await bus.close();
   });
+
+  it("cleans up channelHandlers on unsubscribe in fallback mode", async () => {
+    const transport = new RedisTransport({
+      redisUrl: "redis://127.0.0.1:54321",
+      connectTimeoutMs: 100,
+      maxRetries: 0,
+      fallbackToMemory: true,
+    });
+    await transport.connect();
+
+    const handler = () => {};
+    const unsub = await transport.subscribe("leak-check", handler);
+
+    // Channel handlers should have registered
+    expect(
+      (transport as unknown as { channelHandlers: Map<string, Set<unknown>> }).channelHandlers
+        .get("leak-check")
+        ?.has(handler),
+    ).toBe(true);
+
+    await unsub();
+
+    // After unsubscribe, handler must be removed from channelHandlers to prevent memory leak
+    expect(
+      (transport as unknown as { channelHandlers: Map<string, Set<unknown>> }).channelHandlers.has(
+        "leak-check",
+      ),
+    ).toBe(false);
+
+    await transport.close();
+  });
+
+  it("handles concurrent publishes during fallback activation without throwing", async () => {
+    const transport = new RedisTransport({
+      redisUrl: "redis://127.0.0.1:54321",
+      connectTimeoutMs: 100,
+      maxRetries: 0,
+      fallbackToMemory: true,
+    });
+
+    // Subscribing before connect
+    const messages: string[] = [];
+    await transport.subscribe("concurrent-test", (m) => {
+      messages.push(m);
+    });
+
+    // Connect triggers fallback
+    const connectPromise = transport.connect();
+
+    // In-flight concurrent publish during activation
+    const publishPromise = transport.publish("concurrent-test", "concurrent-msg");
+
+    await Promise.all([connectPromise, publishPromise]);
+
+    expect(messages).toEqual(["concurrent-msg"]);
+    await transport.close();
+  });
 });

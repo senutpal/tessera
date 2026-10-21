@@ -1,7 +1,12 @@
 import { EventEmitter } from "node:events";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { EventBus, GridDeltaBatch, GridDeltaTransformer } from "@tessera/event-bus";
+import {
+  type EventBus,
+  type GridDeltaBatch,
+  type GridDeltaTransformer,
+  getMicrosecondTimestamp,
+} from "@tessera/event-bus";
 import { WebSocket, WebSocketServer } from "ws";
 import { type ClientSession, SessionManager } from "./sessionManager.js";
 
@@ -34,6 +39,7 @@ export class ClearinghouseSocketServer extends EventEmitter {
   private sessionManager = new SessionManager();
   private heartbeatTimer: NodeJS.Timeout | undefined = undefined;
   private transformerUnsubscribe: (() => void) | undefined = undefined;
+  private eventBusUnsubscribe: (() => void) | undefined = undefined;
   private portNum = 0;
 
   constructor(private readonly options: ClearinghouseSocketServerOptions = {}) {
@@ -110,6 +116,23 @@ export class ClearinghouseSocketServer extends EventEmitter {
         this.broadcastBatch("ledger", batch);
       });
     }
+
+    // If an EventBus is provided, wire it to the transformer automatically
+    if (this.options.eventBus && this.options.transformer) {
+      this.eventBusUnsubscribe = this.options.transformer.attachToBus(this.options.eventBus);
+    }
+  }
+
+  private sendToSocket(socket: WebSocket, message: string): boolean {
+    if (socket.readyState === WebSocket.OPEN) {
+      try {
+        socket.send(message);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
   }
 
   private async handleConnection(socket: WebSocket, req: IncomingMessage): Promise<void> {
@@ -169,13 +192,18 @@ export class ClearinghouseSocketServer extends EventEmitter {
     });
 
     socket.on("close", () => {
-      this.sessionManager.removeSession(sessionId);
-      this.emit("client_disconnected", session);
+      const removed = this.sessionManager.removeSession(sessionId);
+      if (removed) {
+        this.emit("client_disconnected", session);
+      }
     });
 
     socket.on("error", (err) => {
       this.emit("error", err, session);
-      this.sessionManager.removeSession(sessionId);
+      const removed = this.sessionManager.removeSession(sessionId);
+      if (removed) {
+        this.emit("client_disconnected", session);
+      }
     });
 
     // Immediately hydrate client with state snapshot
@@ -189,27 +217,43 @@ export class ClearinghouseSocketServer extends EventEmitter {
     switch (message.type) {
       case "subscribe": {
         if (typeof message.channel === "string") {
-          this.sessionManager.subscribe(session.id, message.channel);
+          const chan = message.channel;
+          this.sessionManager.subscribe(session.id, chan);
+          if (message.ack === true) {
+            this.sendToSocket(
+              session.socket,
+              JSON.stringify({ type: "subscribed", channel: chan }),
+            );
+          }
+          if (chan.startsWith("tx:")) {
+            this.sendSnapshot(session, chan);
+          }
         }
         break;
       }
 
       case "unsubscribe": {
         if (typeof message.channel === "string") {
-          this.sessionManager.unsubscribe(session.id, message.channel);
+          const chan = message.channel;
+          this.sessionManager.unsubscribe(session.id, chan);
+          if (message.ack === true) {
+            this.sendToSocket(
+              session.socket,
+              JSON.stringify({ type: "unsubscribed", channel: chan }),
+            );
+          }
         }
         break;
       }
 
       case "get_snapshot": {
-        this.sendSnapshot(session);
+        const chan = typeof message.channel === "string" ? message.channel : "ledger";
+        this.sendSnapshot(session, chan);
         break;
       }
 
       case "ping": {
-        if (session.socket.readyState === WebSocket.OPEN) {
-          session.socket.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
-        }
+        this.sendToSocket(session.socket, JSON.stringify({ type: "pong", timestamp: Date.now() }));
         break;
       }
 
@@ -221,10 +265,27 @@ export class ClearinghouseSocketServer extends EventEmitter {
     }
   }
 
-  private sendSnapshot(session: ClientSession): void {
+  private sendSnapshot(session: ClientSession, channel = "ledger"): void {
     if (session.socket.readyState !== WebSocket.OPEN) return;
 
     if (this.options.transformer) {
+      if (channel.startsWith("tx:")) {
+        const txId = channel.substring(3);
+        const record = this.options.transformer.getRecord(txId);
+        const records = record ? [record] : [];
+        this.sendToSocket(
+          session.socket,
+          JSON.stringify({
+            type: "snapshot",
+            channel,
+            sequenceNumber: record?.sequenceNumber ?? 0,
+            timestampMicros: record?.timestampMicros ?? getMicrosecondTimestamp(),
+            data: records,
+          }),
+        );
+        return;
+      }
+
       const snapshot = this.options.transformer.getSnapshotBatch();
       const payload = JSON.stringify({
         type: "snapshot",
@@ -233,12 +294,13 @@ export class ClearinghouseSocketServer extends EventEmitter {
         timestampMicros: snapshot.timestampMicros,
         data: snapshot.records,
       });
-      session.socket.send(payload);
+      this.sendToSocket(session.socket, payload);
     } else {
-      session.socket.send(
+      this.sendToSocket(
+        session.socket,
         JSON.stringify({
           type: "snapshot",
-          channel: "ledger",
+          channel,
           sequenceNumber: 0,
           timestampMicros: Date.now() * 1000,
           data: [],
@@ -252,14 +314,20 @@ export class ClearinghouseSocketServer extends EventEmitter {
     for (const session of sessions) {
       if (!session.isAlive) {
         // Did not respond to ping in last cycle
-        this.sessionManager.removeSession(session.id);
-        session.socket.terminate();
-        this.emit("client_disconnected", session);
+        const removed = this.sessionManager.removeSession(session.id);
+        try {
+          session.socket.terminate();
+        } catch {}
+        if (removed) {
+          this.emit("client_disconnected", session);
+        }
       } else {
         session.isAlive = false;
         session.lastPing = Date.now();
         if (session.socket.readyState === WebSocket.OPEN) {
-          session.socket.ping();
+          try {
+            session.socket.ping();
+          } catch {}
         }
       }
     }
@@ -277,6 +345,35 @@ export class ClearinghouseSocketServer extends EventEmitter {
     });
 
     this.sendRawToChannel(channel, payload);
+
+    // Also route transaction-specific deltas to subscribers of tx:<transactionId>
+    for (const item of batch.deltas) {
+      const txChannel = `tx:${item.data.transactionId}`;
+      const sessions = this.sessionManager.getSessionsForChannel(txChannel);
+      if (sessions.length > 0) {
+        const itemBatch: GridDeltaBatch = {
+          sequenceNumber: item.data.sequenceNumber,
+          timestampMicros: item.data.timestampMicros,
+          timestamp: batch.timestamp,
+          deltas: [item],
+          transaction: {
+            add: item.type === "add" ? [item.data] : [],
+            update: item.type === "update" ? [item.data] : [],
+            remove: item.type === "remove" ? [item.data] : [],
+          },
+        };
+        const itemPayload = JSON.stringify({
+          type: "delta",
+          channel: txChannel,
+          sequenceNumber: itemBatch.sequenceNumber,
+          timestampMicros: itemBatch.timestampMicros,
+          timestamp: itemBatch.timestamp,
+          deltas: itemBatch.deltas,
+          transaction: itemBatch.transaction,
+        });
+        this.sendRawToChannel(txChannel, itemPayload);
+      }
+    }
   }
 
   broadcast(channel: string, data: unknown): void {
@@ -294,7 +391,7 @@ export class ClearinghouseSocketServer extends EventEmitter {
           this.emit("backpressure", session);
           continue; // Backpressure protection: skip frame for slow consumer
         }
-        session.socket.send(message);
+        this.sendToSocket(session.socket, message);
       }
     }
   }
@@ -310,6 +407,11 @@ export class ClearinghouseSocketServer extends EventEmitter {
       this.transformerUnsubscribe = undefined;
     }
 
+    if (this.eventBusUnsubscribe) {
+      this.eventBusUnsubscribe();
+      this.eventBusUnsubscribe = undefined;
+    }
+
     const sessions = this.sessionManager.getAllSessions();
     for (const session of sessions) {
       try {
@@ -321,7 +423,19 @@ export class ClearinghouseSocketServer extends EventEmitter {
     if (this.wss) {
       const wss = this.wss;
       await new Promise<void>((resolve) => {
-        wss.close(() => resolve());
+        const timeout = setTimeout(() => {
+          for (const client of wss.clients) {
+            try {
+              client.terminate();
+            } catch {}
+          }
+          resolve();
+        }, 500);
+
+        wss.close(() => {
+          clearTimeout(timeout);
+          resolve();
+        });
       });
       this.wss = undefined;
     }

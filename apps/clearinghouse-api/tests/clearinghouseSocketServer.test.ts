@@ -1,6 +1,10 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { type ClearinghouseRecord, createGridDeltaTransformer } from "@tessera/event-bus";
+import {
+  type ClearinghouseRecord,
+  createEventBus,
+  createGridDeltaTransformer,
+} from "@tessera/event-bus";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { type ClearinghouseSocketServer, createClearinghouseSocketServer } from "../index.js";
@@ -332,5 +336,144 @@ describe("ClearinghouseSocketServer", () => {
     expect(msg.type).toBe("snapshot");
 
     httpServer.close();
+  });
+
+  it("wires eventBus to transformer automatically when both are provided", async () => {
+    const bus = createEventBus({ fallbackToMemory: true });
+    await bus.connect();
+
+    const transformer = createGridDeltaTransformer({ batchWindowMs: 0 });
+    server = createClearinghouseSocketServer({
+      port: 0,
+      host: "127.0.0.1",
+      transformer,
+      eventBus: bus,
+    });
+    await server.start();
+    port = server.port;
+
+    const client = await createClient();
+    await client.nextMessage(); // consume snapshot
+
+    await bus.publish({
+      eventId: "e-bus-wire",
+      type: "MandateVerified",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-wire-1",
+        mandateId: "m-wire-1",
+        agentId: "agent-w",
+        merchantDomain: "store.com",
+        amount: 2500,
+        currency: "USD",
+        riskScore: 10,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+      },
+    });
+
+    const deltaMsg = await client.nextMessage();
+    expect(deltaMsg.type).toBe("delta");
+    expect(deltaMsg.deltas?.[0]?.data.transactionId).toBe("tx-wire-1");
+
+    await bus.close();
+  });
+
+  it("routes transaction deltas to clients subscribed to tx:<id> channels", async () => {
+    const transformer = createGridDeltaTransformer({ batchWindowMs: 0 });
+    server = createClearinghouseSocketServer({
+      port: 0,
+      host: "127.0.0.1",
+      transformer,
+    });
+    await server.start();
+    port = server.port;
+
+    const client = await createClient();
+    await client.nextMessage(); // initial ledger snapshot
+
+    // Subscribe to tx:tx-special
+    client.ws.send(JSON.stringify({ type: "subscribe", channel: "tx:tx-special", ack: true }));
+    const ackMsg = await client.nextMessage();
+    expect(ackMsg.type).toBe("subscribed");
+    expect(ackMsg.channel).toBe("tx:tx-special");
+
+    const snapMsg = await client.nextMessage();
+    expect(snapMsg.type).toBe("snapshot");
+    expect(snapMsg.channel).toBe("tx:tx-special");
+
+    // Ingest event for tx-special
+    transformer.processEvent({
+      eventId: "e-special",
+      type: "MandateVerified",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-special",
+        mandateId: "m-special",
+        agentId: "agent-s",
+        merchantDomain: "special.com",
+        amount: 8888,
+        currency: "USD",
+        riskScore: 8,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+      },
+    });
+
+    const txDelta = await client.nextMessage();
+    expect(txDelta.channel).toBe("ledger"); // from ledger subscription
+    const specificDelta = await client.nextMessage();
+    expect(specificDelta.channel).toBe("tx:tx-special"); // from tx subscription
+    expect(specificDelta.deltas?.[0]?.data.transactionId).toBe("tx-special");
+  });
+
+  it("isolates client send errors during broadcast without dropping other clients", async () => {
+    server = createClearinghouseSocketServer({ port: 0, host: "127.0.0.1" });
+    await server.start();
+    port = server.port;
+
+    const c1 = await createClient();
+    const c2 = await createClient();
+    await c1.nextMessage();
+    await c2.nextMessage();
+
+    // Cause c1 socket.send to throw an error
+    c1.ws.send = () => {
+      throw new Error("Simulated socket write failure");
+    };
+
+    // Broadcast should succeed and reach c2 despite c1 error
+    server.broadcast("ledger", { type: "test_resilience", text: "survived" });
+
+    const c2Msg = await c2.nextMessage();
+    expect(c2Msg.type).toBe("test_resilience");
+  });
+
+  it("emits client_disconnected exactly once per session on heartbeat termination", async () => {
+    server = createClearinghouseSocketServer({
+      port: 0,
+      host: "127.0.0.1",
+      heartbeatIntervalMs: 50,
+    });
+
+    let disconnectCount = 0;
+    server.on("client_disconnected", () => {
+      disconnectCount += 1;
+    });
+
+    await server.start();
+    port = server.port;
+
+    const client = await createClient();
+    await client.nextMessage();
+
+    // Suppress pong
+    client.ws.pong = () => {};
+
+    // Wait for heartbeat cycle to detect dead connection and terminate
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Verify it was emitted exactly once, not twice
+    expect(disconnectCount).toBe(1);
   });
 });
