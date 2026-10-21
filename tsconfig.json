@@ -19,5 +19,5 @@
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": ["packages/**/*"]
+  "include": ["packages/**/*", "apps/**/*"]
 }
