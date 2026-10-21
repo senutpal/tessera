@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Copy, Layers, Lock, ShieldCheck, X } from "lucide-react";
+import { AlertTriangle, Check, Copy, Lock, ShieldCheck, X } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -99,32 +99,27 @@ export const TransactionDetailDrawer: React.FC<TransactionDetailDrawerProps> = (
       >
         {/* Drawer Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-900/60">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 flex items-center justify-center text-zinc-600 dark:text-zinc-300 shadow-sm">
-              <Layers className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono font-semibold tracking-wider text-zinc-500 dark:text-zinc-400 uppercase">
+                Mandate Inspector
+              </span>
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-mono font-semibold tracking-wider text-zinc-500 dark:text-zinc-400 uppercase">
-                  Mandate Inspector
-                </span>
-              </div>
-              <h2 className="text-sm font-mono font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
-                {record.transactionId}
-                <button
-                  type="button"
-                  onClick={() => copyToClipboard(record.transactionId, "txId")}
-                  className="text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors"
-                  title="Copy Transaction ID"
-                >
-                  {copiedKey === "txId" ? (
-                    <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                  ) : (
-                    <Copy className="w-3.5 h-3.5" />
-                  )}
-                </button>
-              </h2>
-            </div>
+            <h2 className="text-sm font-mono font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+              {record.transactionId}
+              <button
+                type="button"
+                onClick={() => copyToClipboard(record.transactionId, "txId")}
+                className="text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-300 transition-colors"
+                title="Copy Transaction ID"
+              >
+                {copiedKey === "txId" ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </h2>
           </div>
 
           <button
