@@ -105,8 +105,9 @@ export function normalizePayPalDispute(
 
   // Derive allowed actions from HATEOAS links or status
   const allowedActionsSet = new Set<DisputeAction>();
-  if (Array.isArray(wire.links) && wire.links.length > 0) {
-    for (const link of wire.links) {
+  const hasLinks = Array.isArray(wire.links);
+  if (hasLinks) {
+    for (const link of wire.links ?? []) {
       const rel = (link.rel ?? "").toLowerCase();
       if (rel === "provide-evidence" || rel === "evidence") {
         allowedActionsSet.add(DisputeAction.PROVIDE_EVIDENCE);
@@ -120,10 +121,8 @@ export function normalizePayPalDispute(
         allowedActionsSet.add(DisputeAction.SEND_MESSAGE);
       }
     }
-  }
-
-  // If links were not provided (e.g. some summary listings), infer standard actions from status
-  if (allowedActionsSet.size === 0) {
+  } else {
+    // If links were omitted entirely (e.g. some summary listings), infer standard actions from status
     if (status === ClearinghouseDisputeStatus.WAITING_FOR_SELLER) {
       allowedActionsSet.add(DisputeAction.PROVIDE_EVIDENCE);
       allowedActionsSet.add(DisputeAction.ACCEPT_CLAIM);

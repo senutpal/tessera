@@ -171,15 +171,30 @@ describe("DisputesService & normalizePayPalDispute", () => {
       expect(domain.transactionId).toBe("PP-D-12345");
     });
 
-    it("infers allowed actions when HATEOAS links are not present in summary", () => {
+    it("infers allowed actions when HATEOAS links are omitted entirely in summary", () => {
       const wire = createMockDisputeItem({
         status: "WAITING_FOR_SELLER_RESPONSE",
-        links: [],
+        links: undefined,
       });
       const domain = normalizePayPalDispute(wire);
       expect(domain.allowedActions).toContain(DisputeAction.PROVIDE_EVIDENCE);
       expect(domain.allowedActions).toContain(DisputeAction.ACCEPT_CLAIM);
       expect(domain.allowedActions).toContain(DisputeAction.ESCALATE);
+    });
+
+    it("respects explicit HATEOAS links without fallback inference when links array is provided", () => {
+      const wire = createMockDisputeItem({
+        status: "WAITING_FOR_SELLER_RESPONSE",
+        links: [
+          {
+            href: "https://api-m.sandbox.paypal.com/v1/customer/disputes/PP-D-12345",
+            rel: "self",
+            method: "GET",
+          },
+        ],
+      });
+      const domain = normalizePayPalDispute(wire);
+      expect(domain.allowedActions).toEqual([]);
     });
   });
 
