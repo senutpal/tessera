@@ -237,12 +237,130 @@ describe("GridDeltaTransformer (Stateful Hydrator & Batcher)", () => {
     expect(firstBatch.deltas[0].type).toBe("add");
     expect(firstBatch.deltas[1].type).toBe("update");
 
-    // AG Grid applyTransaction structure:
+    // AG Grid applyTransaction structure (coalesced by default):
+    expect(firstBatch.transaction.add).toHaveLength(1);
+    expect(firstBatch.transaction.add[0].transactionId).toBe("tx-1");
+    expect(firstBatch.transaction.add[0].authorizationId).toBe("auth-1");
+    expect(firstBatch.transaction.update).toHaveLength(0);
+    expect(firstBatch.transaction.remove).toHaveLength(0);
+
+    transformer.close();
+  });
+
+  it("preserves individual delta arrays when coalesce: false is explicitly configured", async () => {
+    const transformer = new GridDeltaTransformer({
+      batchWindowMs: 20,
+      maxBatchSize: 10,
+      coalesce: false,
+    });
+
+    const batchesReceived: GridDeltaBatch[] = [];
+    transformer.onBatch((batch) => {
+      batchesReceived.push(batch);
+    });
+
+    transformer.processEvent({
+      eventId: "e1",
+      type: "MandateVerified",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-1",
+        mandateId: "m1",
+        agentId: "a1",
+        merchantDomain: "amazon.com",
+        amount: 9999,
+        currency: "USD",
+        riskScore: 10,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+      },
+    });
+
+    transformer.processEvent({
+      eventId: "e2",
+      type: "EscrowLocked",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-1",
+        mandateId: "m1",
+        orderId: "ord-1",
+        authorizationId: "auth-1",
+        amount: 9999,
+        currency: "USD",
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(batchesReceived.length).toBeGreaterThanOrEqual(1);
+    const firstBatch = batchesReceived[0];
+
     expect(firstBatch.transaction.add).toHaveLength(1);
     expect(firstBatch.transaction.add[0].transactionId).toBe("tx-1");
     expect(firstBatch.transaction.update).toHaveLength(1);
     expect(firstBatch.transaction.update[0].authorizationId).toBe("auth-1");
     expect(firstBatch.transaction.remove).toHaveLength(0);
+
+    transformer.close();
+  });
+
+  it("coalesces remove followed by add into an update for existing grid rows", async () => {
+    const transformer = new GridDeltaTransformer({
+      batchWindowMs: 20,
+      coalesce: true,
+    });
+
+    transformer.hydrate([
+      {
+        transactionId: "tx-readd-1",
+        mandateId: "m1",
+        agentId: "a1",
+        merchantDomain: "example.com",
+        amount: 1000,
+        currency: "USD",
+        clearinghouseState: "AUTHORIZED_IN_ESCROW",
+        escrowStatus: "AUTHORIZED_HOLD",
+        riskScore: 5,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+        createdAt: "2026-10-21T00:00:00Z",
+        updatedAt: "2026-10-21T00:00:00Z",
+        sequenceNumber: 1,
+        timestampMicros: 1729500000000000,
+      },
+    ]);
+
+    const batchesReceived: GridDeltaBatch[] = [];
+    transformer.onBatch((batch) => batchesReceived.push(batch));
+
+    transformer.removeRecord("tx-readd-1");
+
+    transformer.processEvent({
+      eventId: "e-readd",
+      type: "MandateVerified",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-readd-1",
+        mandateId: "m2",
+        agentId: "a2",
+        merchantDomain: "example.com",
+        amount: 2000,
+        currency: "USD",
+        riskScore: 5,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(batchesReceived).toHaveLength(1);
+    const batch = batchesReceived[0];
+    expect(batch.transaction.remove).toHaveLength(0);
+    expect(batch.transaction.add).toHaveLength(0);
+    expect(batch.transaction.update).toHaveLength(1);
+    expect(batch.transaction.update[0].transactionId).toBe("tx-readd-1");
+    expect(batch.transaction.update[0].amount).toBe(2000);
 
     transformer.close();
   });
