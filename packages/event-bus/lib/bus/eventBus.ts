@@ -25,6 +25,8 @@ export class EventBus {
   private typeSubscriptions = new Map<string, Set<(event: DomainEvent) => void | Promise<void>>>();
   private defaultChannelSubscribed = false;
   private defaultChannelUnsubscribe: (() => Promise<void>) | undefined = undefined;
+  private connectPromise: Promise<void> | undefined = undefined;
+  private defaultSubscriptionPromise: Promise<void> | undefined = undefined;
 
   constructor(options: EventBusOptions = {}) {
     this.channelPrefix = options.channelPrefix ?? "tessera";
@@ -46,10 +48,20 @@ export class EventBus {
   }
 
   async connect(): Promise<void> {
-    if (!this.transport.isConnected) {
-      await this.transport.connect();
+    if (this.connectPromise) {
+      return this.connectPromise;
     }
-    await this.ensureDefaultChannelSubscription();
+    this.connectPromise = (async () => {
+      try {
+        if (!this.transport.isConnected) {
+          await this.transport.connect();
+        }
+        await this.ensureDefaultChannelSubscription();
+      } finally {
+        this.connectPromise = undefined;
+      }
+    })();
+    return this.connectPromise;
   }
 
   private getFullChannelName(channel?: string): string {
@@ -59,17 +71,34 @@ export class EventBus {
 
   private async ensureDefaultChannelSubscription(): Promise<void> {
     if (this.defaultChannelSubscribed) return;
-    this.defaultChannelSubscribed = true;
+    if (this.defaultSubscriptionPromise) {
+      return this.defaultSubscriptionPromise;
+    }
 
-    const fullChannel = this.getFullChannelName(this.defaultChannel);
-    this.defaultChannelUnsubscribe = await this.transport.subscribe(fullChannel, (rawMessage) => {
+    this.defaultSubscriptionPromise = (async () => {
       try {
-        const parsed = JSON.parse(rawMessage) as DomainEvent;
-        this.dispatchDomainEvent(parsed);
+        const fullChannel = this.getFullChannelName(this.defaultChannel);
+        this.defaultChannelUnsubscribe = await this.transport.subscribe(
+          fullChannel,
+          (rawMessage) => {
+            try {
+              const parsed = JSON.parse(rawMessage) as DomainEvent;
+              this.dispatchDomainEvent(parsed);
+            } catch (err) {
+              console.error("[EventBus] Failed to parse incoming domain event JSON:", err);
+            }
+          },
+        );
+        this.defaultChannelSubscribed = true;
       } catch (err) {
-        console.error("[EventBus] Failed to parse incoming domain event JSON:", err);
+        this.defaultChannelSubscribed = false;
+        throw err;
+      } finally {
+        this.defaultSubscriptionPromise = undefined;
       }
-    });
+    })();
+
+    return this.defaultSubscriptionPromise;
   }
 
   private dispatchDomainEvent(event: DomainEvent): void {
@@ -78,7 +107,12 @@ export class EventBus {
     if (specificHandlers) {
       for (const handler of specificHandlers) {
         try {
-          void handler(event);
+          const res = handler(event);
+          if (res && typeof (res as Promise<void>).catch === "function") {
+            (res as Promise<void>).catch((err) => {
+              console.error(`[EventBus] Error in subscriber for event ${event.type}:`, err);
+            });
+          }
         } catch (err) {
           console.error(`[EventBus] Error in subscriber for event ${event.type}:`, err);
         }
@@ -90,7 +124,15 @@ export class EventBus {
     if (wildcardHandlers) {
       for (const handler of wildcardHandlers) {
         try {
-          void handler(event);
+          const res = handler(event);
+          if (res && typeof (res as Promise<void>).catch === "function") {
+            (res as Promise<void>).catch((err) => {
+              console.error(
+                `[EventBus] Error in wildcard subscriber for event ${event.type}:`,
+                err,
+              );
+            });
+          }
         } catch (err) {
           console.error(`[EventBus] Error in wildcard subscriber for event ${event.type}:`, err);
         }
@@ -142,19 +184,24 @@ export class EventBus {
   async subscribeChannel(
     channel: string,
     handler: (event: DomainEvent) => void | Promise<void>,
-  ): Promise<() => void> {
+  ): Promise<() => Promise<void>> {
     const fullChannel = this.getFullChannelName(channel);
     const unsub = await this.transport.subscribe(fullChannel, (raw) => {
       try {
         const parsed = JSON.parse(raw) as DomainEvent;
-        void handler(parsed);
+        const res = handler(parsed);
+        if (res && typeof (res as Promise<void>).catch === "function") {
+          (res as Promise<void>).catch((err) => {
+            console.error(`[EventBus] Error in channel subscriber for ${channel}:`, err);
+          });
+        }
       } catch (err) {
         console.error(`[EventBus] Failed to parse message on channel ${channel}:`, err);
       }
     });
 
-    return () => {
-      void unsub();
+    return async () => {
+      await unsub();
     };
   }
 
@@ -176,13 +223,16 @@ export class EventBus {
   }
 
   async close(): Promise<void> {
-    if (this.defaultChannelUnsubscribe) {
-      await this.defaultChannelUnsubscribe();
+    try {
+      if (this.defaultChannelUnsubscribe) {
+        await this.defaultChannelUnsubscribe();
+      }
+    } finally {
       this.defaultChannelUnsubscribe = undefined;
+      this.defaultChannelSubscribed = false;
+      this.typeSubscriptions.clear();
+      await this.transport.close();
     }
-    this.defaultChannelSubscribed = false;
-    this.typeSubscriptions.clear();
-    await this.transport.close();
   }
 }
 

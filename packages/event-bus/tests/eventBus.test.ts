@@ -376,4 +376,71 @@ describe("RedisTransport & Graceful Fallback", () => {
     expect(messages).toEqual(["concurrent-msg"]);
     await transport.close();
   });
+
+  it("handles concurrent connect() calls on EventBus sharing in-flight subscription", async () => {
+    const bus = createEventBus({ fallbackToMemory: true });
+    await Promise.all([bus.connect(), bus.connect(), bus.connect()]);
+
+    expect(bus.isConnected).toBe(true);
+    await bus.close();
+  });
+
+  it("handles async subscriber rejections without crashing", async () => {
+    const bus = createEventBus({ fallbackToMemory: true });
+    await bus.connect();
+
+    let handledSecond = false;
+    bus.subscribe("MandateVerified", async () => {
+      throw new Error("Async subscriber rejection");
+    });
+    bus.subscribe("MandateVerified", () => {
+      handledSecond = true;
+    });
+
+    await bus.publish({
+      eventId: "e-async",
+      type: "MandateVerified",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-async-1",
+        mandateId: "m1",
+        agentId: "a1",
+        merchantDomain: "test.com",
+        amount: 100,
+        currency: "USD",
+        riskScore: 1,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(handledSecond).toBe(true);
+    await bus.close();
+  });
+
+  it("returns an awaitable unsubscribe function from subscribeChannel", async () => {
+    const bus = createEventBus({ fallbackToMemory: true });
+    await bus.connect();
+
+    const unsub = await bus.subscribeChannel("custom-chan", () => {});
+    await expect(unsub()).resolves.toBeUndefined();
+
+    await bus.close();
+  });
+
+  it("guarantees transport.close() executes even if unsubscribe throws during close", async () => {
+    const bus = createEventBus({ fallbackToMemory: true });
+    await bus.connect();
+
+    // Force defaultChannelUnsubscribe to throw
+    (
+      bus as unknown as { defaultChannelUnsubscribe: () => Promise<void> }
+    ).defaultChannelUnsubscribe = async () => {
+      throw new Error("Unsubscribe failed");
+    };
+
+    await expect(bus.close()).rejects.toThrow("Unsubscribe failed");
+    expect(bus.isConnected).toBe(false);
+  });
 });
