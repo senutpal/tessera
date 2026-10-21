@@ -256,6 +256,15 @@ export const PayPalProvideEvidenceWireSchema = z
   .passthrough();
 export type PayPalProvideEvidenceWire = z.infer<typeof PayPalProvideEvidenceWireSchema>;
 
+export const PayPalProvideEvidencePayloadWireSchema = z
+  .object({
+    evidences: z.array(PayPalProvideEvidenceWireSchema).min(1),
+  })
+  .passthrough();
+export type PayPalProvideEvidencePayloadWire = z.infer<
+  typeof PayPalProvideEvidencePayloadWireSchema
+>;
+
 export const PayPalAcceptClaimWireSchema = z
   .object({
     note: z.string().max(2000).optional(),
@@ -380,6 +389,7 @@ export interface EvidenceDocument {
 
 export interface EvidenceBundleInput {
   disputeId: string;
+  transactionId?: string | TransactionId | undefined;
   evidenceType?: PayPalEvidenceType | string | undefined;
   tracking?: CarrierTrackingEvidence | undefined;
   mandate?: SignedMandateEvidence | undefined;

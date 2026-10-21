@@ -79,6 +79,8 @@ export {
   PayPalEscalateWireSchema,
   type PayPalEvidenceType,
   PayPalEvidenceTypeSchema,
+  type PayPalProvideEvidencePayloadWire,
+  PayPalProvideEvidencePayloadWireSchema,
   type PayPalProvideEvidenceWire,
   PayPalProvideEvidenceWireSchema,
   PayPalSubsequentActionResponseSchema,

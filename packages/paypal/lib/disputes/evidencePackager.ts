@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { asMandateId, asTransactionId, DisputeError, MandateValidationError } from "@tessera/core";
+import {
+  asMandateId,
+  asTransactionId,
+  DisputeError,
+  MandateValidationError,
+  Money,
+} from "@tessera/core";
 import type { PayPalAuthClient } from "../client/paypalAuthClient.js";
 import { throwPayPalError } from "../client/paypalErrors.js";
 import {
@@ -7,12 +13,25 @@ import {
   type DisputeEvidenceSubmittedEvent,
   type EvidenceBundleInput,
   type EvidenceSubmissionResult,
+  type PayPalProvideEvidencePayloadWire,
   type PayPalProvideEvidenceWire,
   PayPalSubsequentActionResponseSchema,
   type PayPalTrackingInfoWire,
 } from "../types/disputes.js";
 
 const MAX_PAYPAL_NOTE_LENGTH = 2000;
+
+function formatMonetaryEvidenceValue(
+  val: Money | { amount: number; currency: string } | string,
+): string {
+  if (val instanceof Money) {
+    return `${val.toDecimalString()} ${val.currency}`;
+  }
+  if (typeof val === "object" && val !== null && "amount" in val && "currency" in val) {
+    return `${Money.fromAP2(val).toDecimalString()} ${val.currency}`;
+  }
+  return String(val);
+}
 
 /**
  * Builds a structured, tamper-evident audit trail note string containing
@@ -68,7 +87,7 @@ export function buildDisputeEvidenceAuditNote(input: EvidenceBundleInput): strin
       lines.push(`Product: ${q.productTitle}`);
     }
     if (q.total) {
-      lines.push(`Quote Total: ${String(q.total)}`);
+      lines.push(`Quote Total: ${formatMonetaryEvidenceValue(q.total)}`);
     }
   }
 
@@ -95,7 +114,9 @@ export function computeEvidenceHash(input: EvidenceBundleInput): string {
           carrier: input.tracking.carrierName,
           trackingNumber: input.tracking.trackingNumber,
           deliveryProofTimestamp: input.tracking.deliveryProofTimestamp
-            ? String(input.tracking.deliveryProofTimestamp)
+            ? input.tracking.deliveryProofTimestamp instanceof Date
+              ? input.tracking.deliveryProofTimestamp.toISOString()
+              : String(input.tracking.deliveryProofTimestamp)
             : undefined,
         }
       : undefined,
@@ -183,13 +204,19 @@ export class EvidencePackager {
     }
 
     const endpoint = `/v1/customer/disputes/${encodeURIComponent(disputeId)}/provide-evidence`;
-    let response: Response;
+
+    // PayPal Disputes provide-evidence strictly requires multipart/form-data
+    // with `input` JSON containing { evidences: [...] }
+    const formData = new FormData();
+    const payloadWire: PayPalProvideEvidencePayloadWire = {
+      evidences: [evidenceWire],
+    };
+    const inputBlob = new Blob([JSON.stringify(payloadWire)], {
+      type: "application/json",
+    });
+    formData.append("input", inputBlob);
 
     if (input.documents && input.documents.length > 0) {
-      // Multipart/form-data upload when files are attached
-      const formData = new FormData();
-      formData.append("input", JSON.stringify(evidenceWire));
-
       for (const doc of input.documents) {
         const buffer =
           typeof doc.content === "string"
@@ -202,22 +229,12 @@ export class EvidencePackager {
         const blob = new Blob([arrayBuffer], { type: doc.contentType });
         formData.append("evidence-file", blob, doc.name);
       }
-
-      response = await this.authClient.fetchAuthenticated(endpoint, {
-        method: "POST",
-        body: formData,
-      });
-    } else {
-      // Direct JSON submission when no documents are attached
-      response = await this.authClient.fetchAuthenticated(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(evidenceWire),
-      });
     }
+
+    const response = await this.authClient.fetchAuthenticated(endpoint, {
+      method: "POST",
+      body: formData,
+    });
 
     if (!response.ok) {
       await throwPayPalError(
@@ -233,11 +250,15 @@ export class EvidencePackager {
 
     const submittedAt = new Date().toISOString();
 
+    const transactionId = input.transactionId
+      ? asTransactionId(String(input.transactionId).trim())
+      : asTransactionId(disputeId);
+
     // Emit clearinghouse domain event
     const event: DisputeEvidenceSubmittedEvent = {
       type: "dispute.evidence_submitted",
       disputeId,
-      transactionId: asTransactionId(input.tracking?.trackingNumber ? disputeId : disputeId),
+      transactionId,
       evidenceType,
       evidenceHash,
       submittedAt,
@@ -250,7 +271,11 @@ export class EvidencePackager {
     };
 
     if (this.options.eventSink?.emitEvidenceSubmitted) {
-      await this.options.eventSink.emitEvidenceSubmitted(event);
+      try {
+        await this.options.eventSink.emitEvidenceSubmitted(event);
+      } catch {
+        // Safe sink execution: do not fail completed evidence submission
+      }
     }
 
     return {
