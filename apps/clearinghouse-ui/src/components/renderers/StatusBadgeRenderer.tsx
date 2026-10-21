@@ -9,7 +9,9 @@ export interface StatusBadgeRendererProps
 }
 
 export const StatusBadgeRenderer: React.FC<StatusBadgeRendererProps> = (props) => {
-  const rawStatus = props.status ?? props.value ?? String(props.data?.clearinghouseState ?? "");
+  const colField = (props.colDef?.field as keyof ClearinghouseRecord | undefined) ?? props.type;
+  const dataValue = colField && props.data ? String(props.data[colField] ?? "") : undefined;
+  const rawStatus = props.status ?? props.value ?? dataValue ?? "";
   const status = String(rawStatus || "UNKNOWN").toUpperCase();
 
   let colorClasses = "bg-slate-800 text-slate-300 border-slate-700";

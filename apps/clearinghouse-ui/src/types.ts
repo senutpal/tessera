@@ -10,7 +10,16 @@ export type { ClearinghouseRecord, GridDeltaBatch, GridDeltaItem, GridDeltaType,
 
 export type RiskLevel = "low" | "elevated" | "critical";
 
+export interface ClearinghouseAuditBundle {
+  bundleVersion: string;
+  exportedAt: string;
+  totalRecords: number;
+  recordsDigestSha256: string;
+  records: ClearinghouseRecord[];
+}
+
 export function getRiskLevel(score: number): RiskLevel {
+  if (typeof score !== "number" || Number.isNaN(score)) return "low";
   if (score <= 30) return "low";
   if (score <= 70) return "elevated";
   return "critical";
@@ -32,6 +41,7 @@ export interface UseClearinghouseSocketOptions {
   autoConnect?: boolean;
   reconnectIntervalMs?: number;
   maxReconnectIntervalMs?: number;
+  maxBufferSize?: number;
   channel?: string;
   token?: string;
   onSnapshot?: (records: ClearinghouseRecord[]) => void;

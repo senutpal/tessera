@@ -17,7 +17,9 @@ import {
   ClearinghouseGrid,
   type ClearinghouseGridHandle,
   type ClearinghouseRecord,
+  computeAuditBundleDigest,
   type GridTransaction,
+  generateAuditBundle,
   getRiskLevel,
   RiskCellRenderer,
   StatusBadgeRenderer,
@@ -134,6 +136,7 @@ describe("AG Grid Enterprise Clearinghouse Dashboard UI", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     globalThis.WebSocket = originalWebSocket;
     globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
@@ -485,8 +488,6 @@ describe("AG Grid Enterprise Clearinghouse Dashboard UI", () => {
       });
 
       expect(MockWebSocket.instances.length).toBe(2);
-
-      vi.useRealTimers();
     });
   });
 
@@ -563,6 +564,168 @@ describe("AG Grid Enterprise Clearinghouse Dashboard UI", () => {
       expect(mockExportDataAsCsv).toHaveBeenCalledWith({
         fileName: "clearinghouse-ledger.csv",
       });
+    });
+
+    it("exports cryptographic audit bundle and renders export-audit-btn", async () => {
+      const gridRef = createRef<ClearinghouseGridHandle>();
+
+      render(<ClearinghouseGrid ref={gridRef} rowData={[mockRecordLow, mockRecordElevated]} />);
+
+      const auditBtn = screen.getByTestId("export-audit-btn");
+      expect(auditBtn).toBeInTheDocument();
+
+      const bundle = await gridRef.current?.exportAuditBundle();
+      expect(bundle).toBeDefined();
+      expect(bundle?.bundleVersion).toBe("1.0.0");
+      expect(bundle?.totalRecords).toBe(2);
+      expect(bundle?.records).toHaveLength(2);
+      expect(bundle?.recordsDigestSha256).toHaveLength(64);
+      expect(typeof bundle?.exportedAt).toBe("string");
+
+      const directDigest = await computeAuditBundleDigest(
+        JSON.stringify([mockRecordLow, mockRecordElevated]),
+      );
+      expect(directDigest).toBe(bundle?.recordsDigestSha256);
+
+      const directBundle = await generateAuditBundle([mockRecordLow, mockRecordElevated]);
+      expect(directBundle.recordsDigestSha256).toBe(bundle?.recordsDigestSha256);
+      expect(directBundle.totalRecords).toBe(2);
+    });
+
+    it("queues transactions arriving before grid API is attached and flushes on ready", async () => {
+      const gridRef = createRef<ClearinghouseGridHandle>();
+      render(<ClearinghouseGrid ref={gridRef} rowData={[]} />);
+
+      const tx: GridTransaction = {
+        add: [mockRecordLow],
+        update: [],
+        remove: [],
+      };
+
+      // Apply transaction before grid API is mocked/attached
+      act(() => {
+        gridRef.current?.applyTransaction(tx);
+      });
+
+      const mockApplyTransactionAsync = vi.fn();
+      if (gridRef.current) {
+        // Attaching API should flush queued transactions
+        act(() => {
+          // @ts-expect-error test mock injection
+          gridRef.current.api = {
+            applyTransactionAsync: mockApplyTransactionAsync,
+            setGridOption: vi.fn(),
+            exportDataAsCsv: vi.fn(),
+          };
+        });
+      }
+
+      expect(mockApplyTransactionAsync).toHaveBeenCalledWith(tx);
+    });
+  });
+
+  describe("Edge Cases & Hardened Boundaries", () => {
+    it("RiskCellRenderer handles NaN, null, and non-numeric scores gracefully", () => {
+      render(<RiskCellRenderer score={Number.NaN} />);
+      const cell = screen.getAllByTestId("risk-cell")[0];
+      expect(cell).toHaveAttribute("data-risk-score", "0");
+      expect(cell).toHaveAttribute("data-risk-tier", "low");
+      expect(cell.textContent).toContain("LOW");
+      expect(getRiskLevel(Number.NaN)).toBe("low");
+    });
+
+    it("StatusBadgeRenderer extracts status from column field when value is undefined", () => {
+      // colDef field is escrowStatus, but value is undefined
+      render(
+        <StatusBadgeRenderer
+          colDef={{ field: "escrowStatus" }}
+          data={mockRecordElevated}
+          value={undefined}
+        />,
+      );
+      const badge = screen.getByTestId("status-badge");
+      expect(badge).toHaveAttribute("data-status", "AUTHORIZED_HOLD");
+      expect(badge.textContent).toBe("AUTHORIZED HOLD");
+    });
+
+    it("ActionCellRenderer disables buttons for already approved records and URL-encodes mandateId", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ status: "OK" }),
+      });
+      globalThis.fetch = mockFetch;
+
+      const approvedRecord: ClearinghouseRecord = {
+        ...mockRecordElevated,
+        mandateId: "man/special#123",
+        hitlStatus: "APPROVED",
+      };
+
+      render(<ActionCellRenderer record={approvedRecord} apiBaseUrl="http://localhost:3000/" />);
+
+      const approveBtn = screen.getByTestId("action-approve");
+      expect(approveBtn).toBeDisabled();
+      expect(approveBtn.textContent).toBe("Approved");
+
+      const voidBtn = screen.getByTestId("action-void");
+      fireEvent.click(voidBtn);
+
+      await waitFor(() => {
+        expect(mockFetch).toHaveBeenCalledWith(
+          "http://localhost:3000/api/v1/mandates/man%2Fspecial%23123/void",
+          expect.anything(),
+        );
+      });
+    });
+
+    it("useClearinghouseSocket purges stale buffer on snapshot and enforces bounded buffer capacity", async () => {
+      const { result } = renderHook(() =>
+        useClearinghouseSocket({
+          url: "ws://localhost:3000/ws/clearinghouse",
+          autoConnect: true,
+          maxBufferSize: 2,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(MockWebSocket.instances.length).toBe(1);
+      });
+      const ws = MockWebSocket.instances[0];
+
+      // Send 3 delta batches to exceed maxBufferSize = 2
+      act(() => {
+        for (let i = 1; i <= 3; i++) {
+          ws.triggerMessage({
+            type: "delta",
+            sequenceNumber: i,
+            transaction: {
+              add: [{ ...mockRecordLow, transactionId: `tx-${i}` }],
+              update: [],
+              remove: [],
+            },
+          });
+        }
+      });
+
+      // Oldest transaction (tx-1) should have been shifted out, keeping exactly 2
+      const buffered = result.current.getBufferedTransactions();
+      expect(buffered).toHaveLength(2);
+      expect(buffered[0].add[0].transactionId).toBe("tx-2");
+      expect(buffered[1].add[0].transactionId).toBe("tx-3");
+
+      // Snapshot receipt should completely purge stale delta buffer
+      act(() => {
+        ws.triggerMessage({
+          type: "snapshot",
+          sequenceNumber: 10,
+          data: [mockRecordLow],
+        });
+      });
+
+      expect(result.current.getBufferedTransactions()).toHaveLength(0);
+      expect(result.current.snapshot).toHaveLength(1);
+      expect(result.current.lastSequenceNumber).toBe(10);
     });
   });
 });

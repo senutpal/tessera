@@ -5,6 +5,8 @@ export {
   ClearinghouseGrid,
   type ClearinghouseGridHandle,
   type ClearinghouseGridProps,
+  computeAuditBundleDigest,
+  generateAuditBundle,
 } from "./components/ClearinghouseGrid.js";
 
 export {
@@ -25,6 +27,7 @@ export {
 export { useClearinghouseSocket } from "./hooks/useClearinghouseSocket.js";
 
 export {
+  type ClearinghouseAuditBundle,
   type ClearinghouseRecord,
   type ConnectionStatus,
   type GridDeltaBatch,

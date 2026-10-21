@@ -20,14 +20,33 @@ export const ActionCellRenderer: React.FC<ActionCellRendererProps> = (props) => 
     return <span className="text-slate-600 text-xs">-</span>;
   }
 
-  const apiBaseUrl = props.apiBaseUrl ?? props.context?.apiBaseUrl ?? "http://localhost:3000";
+  const rawApiBaseUrl = props.apiBaseUrl ?? props.context?.apiBaseUrl ?? "http://localhost:3000";
+  const apiBaseUrl = rawApiBaseUrl.replace(/\/+$/, "");
+
+  const isTerminal =
+    record.clearinghouseState === "SETTLED" ||
+    record.clearinghouseState === "VOIDED" ||
+    record.clearinghouseState === "REFUNDED" ||
+    record.clearinghouseState === "FAILED" ||
+    record.escrowStatus === "SLA_BREACH_VOIDED" ||
+    record.escrowStatus === "DELIVERED_CAPTURED";
+
+  const isApproved = record.hitlStatus === "APPROVED";
+  const isVoided =
+    record.clearinghouseState === "VOIDED" || record.escrowStatus === "SLA_BREACH_VOIDED";
+  const isDisputed = record.clearinghouseState === "DISPUTED";
 
   const executeAction = async (action: HitlActionType) => {
     if (activeAction) return;
+    if (action === "counter-sign" && (isTerminal || isApproved)) return;
+    if (action === "void" && (isTerminal || isVoided)) return;
+    if (action === "dispute" && (isTerminal || isDisputed)) return;
+
     setActiveAction(action);
     setErrorMsg(null);
 
     try {
+      const encodedMandateId = encodeURIComponent(record.mandateId);
       if (action === "counter-sign") {
         if (props.onApprove) {
           await props.onApprove(record);
@@ -35,7 +54,7 @@ export const ActionCellRenderer: React.FC<ActionCellRendererProps> = (props) => 
           await props.context.onApprove(record);
         } else {
           const res = await fetch(
-            `${apiBaseUrl}/api/v1/mandates/${record.mandateId}/counter-sign`,
+            `${apiBaseUrl}/api/v1/mandates/${encodedMandateId}/counter-sign`,
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -56,7 +75,7 @@ export const ActionCellRenderer: React.FC<ActionCellRendererProps> = (props) => 
         } else if (props.context?.onVoid) {
           await props.context.onVoid(record);
         } else {
-          const res = await fetch(`${apiBaseUrl}/api/v1/mandates/${record.mandateId}/void`, {
+          const res = await fetch(`${apiBaseUrl}/api/v1/mandates/${encodedMandateId}/void`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -75,7 +94,7 @@ export const ActionCellRenderer: React.FC<ActionCellRendererProps> = (props) => 
         } else if (props.context?.onDispute) {
           await props.context.onDispute(record);
         } else {
-          const res = await fetch(`${apiBaseUrl}/api/v1/mandates/${record.mandateId}/dispute`, {
+          const res = await fetch(`${apiBaseUrl}/api/v1/mandates/${encodedMandateId}/dispute`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -98,11 +117,6 @@ export const ActionCellRenderer: React.FC<ActionCellRendererProps> = (props) => 
     }
   };
 
-  const isTerminal =
-    record.clearinghouseState === "SETTLED" ||
-    record.clearinghouseState === "VOIDED" ||
-    record.clearinghouseState === "REFUNDED";
-
   return (
     <div
       data-testid="action-cell"
@@ -113,18 +127,18 @@ export const ActionCellRenderer: React.FC<ActionCellRendererProps> = (props) => 
         type="button"
         data-testid="action-approve"
         aria-label="Approve Counter-sign"
-        disabled={activeAction !== null || isTerminal}
+        disabled={activeAction !== null || isTerminal || isApproved}
         onClick={() => executeAction("counter-sign")}
         className={`px-2 py-1 rounded font-medium text-xs border transition-colors flex items-center gap-1 ${
           activeAction === "counter-sign"
             ? "bg-emerald-950 text-emerald-400 border-emerald-600 animate-pulse cursor-wait"
-            : isTerminal
+            : isTerminal || isApproved
               ? "bg-slate-900 text-slate-600 border-slate-800 cursor-not-allowed opacity-50"
               : "bg-emerald-950/80 text-emerald-300 border-emerald-700/80 hover:bg-emerald-900 hover:text-emerald-200 active:scale-95"
         }`}
       >
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-        {activeAction === "counter-sign" ? "Approving..." : "Approve"}
+        {activeAction === "counter-sign" ? "Approving..." : isApproved ? "Approved" : "Approve"}
       </button>
 
       {/* 1-Click HITL Void Escrow */}
@@ -132,18 +146,18 @@ export const ActionCellRenderer: React.FC<ActionCellRendererProps> = (props) => 
         type="button"
         data-testid="action-void"
         aria-label="Void Escrow"
-        disabled={activeAction !== null || isTerminal}
+        disabled={activeAction !== null || isTerminal || isVoided}
         onClick={() => executeAction("void")}
         className={`px-2 py-1 rounded font-medium text-xs border transition-colors flex items-center gap-1 ${
           activeAction === "void"
             ? "bg-amber-950 text-amber-400 border-amber-600 animate-pulse cursor-wait"
-            : isTerminal
+            : isTerminal || isVoided
               ? "bg-slate-900 text-slate-600 border-slate-800 cursor-not-allowed opacity-50"
               : "bg-amber-950/80 text-amber-300 border-amber-700/80 hover:bg-amber-900 hover:text-amber-200 active:scale-95"
         }`}
       >
         <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-        {activeAction === "void" ? "Voiding..." : "Void Escrow"}
+        {activeAction === "void" ? "Voiding..." : isVoided ? "Voided" : "Void Escrow"}
       </button>
 
       {/* 1-Click HITL Dispute Escalation */}
@@ -151,18 +165,18 @@ export const ActionCellRenderer: React.FC<ActionCellRendererProps> = (props) => 
         type="button"
         data-testid="action-dispute"
         aria-label="Dispute Escalation"
-        disabled={activeAction !== null || record.clearinghouseState === "DISPUTED"}
+        disabled={activeAction !== null || isTerminal || isDisputed}
         onClick={() => executeAction("dispute")}
         className={`px-2 py-1 rounded font-medium text-xs border transition-colors flex items-center gap-1 ${
           activeAction === "dispute"
             ? "bg-rose-950 text-rose-400 border-rose-600 animate-pulse cursor-wait"
-            : record.clearinghouseState === "DISPUTED"
+            : isTerminal || isDisputed
               ? "bg-slate-900 text-slate-600 border-slate-800 cursor-not-allowed opacity-50"
               : "bg-rose-950/80 text-rose-300 border-rose-700/80 hover:bg-rose-900 hover:text-rose-200 active:scale-95"
         }`}
       >
         <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
-        {activeAction === "dispute" ? "Escalating..." : "Dispute"}
+        {activeAction === "dispute" ? "Escalating..." : isDisputed ? "Disputed" : "Dispute"}
       </button>
 
       {errorMsg && (

@@ -10,6 +10,7 @@ import type {
 const DEFAULT_WS_URL = "ws://localhost:3000/ws/clearinghouse";
 const DEFAULT_RECONNECT_INTERVAL_MS = 1000;
 const DEFAULT_MAX_RECONNECT_INTERVAL_MS = 10000;
+const DEFAULT_MAX_BUFFER_SIZE = 1000;
 
 export function useClearinghouseSocket(
   options: UseClearinghouseSocketOptions = {},
@@ -19,6 +20,7 @@ export function useClearinghouseSocket(
     autoConnect = true,
     reconnectIntervalMs = DEFAULT_RECONNECT_INTERVAL_MS,
     maxReconnectIntervalMs = DEFAULT_MAX_RECONNECT_INTERVAL_MS,
+    maxBufferSize = DEFAULT_MAX_BUFFER_SIZE,
     channel = "ledger",
     token,
     onSnapshot,
@@ -77,147 +79,171 @@ export function useClearinghouseSocket(
     return false;
   }, []);
 
-  const connect = useCallback(() => {
-    explicitDisconnectRef.current = false;
-    clearReconnectTimer();
+  const connect = useCallback(
+    (isReconnect = false) => {
+      explicitDisconnectRef.current = false;
+      clearReconnectTimer();
 
-    // Close any existing active connection cleanly
-    if (wsRef.current) {
-      try {
-        wsRef.current.close(1000, "Reconnecting");
-      } catch {}
-      wsRef.current = null;
-    }
-
-    setConnectionStatus("connecting");
-
-    // Append auth token if provided
-    let connectUrl = url;
-    if (token) {
-      const urlObj = new URL(url);
-      urlObj.searchParams.set("token", token);
-      connectUrl = urlObj.toString();
-    }
-
-    try {
-      const socket = new WebSocket(connectUrl);
-      wsRef.current = socket;
-
-      socket.onopen = () => {
-        if (wsRef.current !== socket) return;
+      if (!isReconnect) {
         reconnectAttemptsRef.current = 0;
-        setConnectionStatus("connected");
+      }
 
-        // Subscribe to channel if required
-        if (channel && channel !== "ledger") {
-          sendMessage({ type: "subscribe", channel, ack: true });
-        }
-      };
-
-      socket.onmessage = (event: MessageEvent) => {
-        if (wsRef.current !== socket) return;
-
+      // Close any existing active connection cleanly
+      if (wsRef.current) {
         try {
-          const rawData = typeof event.data === "string" ? event.data : String(event.data);
-          const parsed = JSON.parse(rawData);
+          wsRef.current.close(1000, "Reconnecting");
+        } catch {}
+        wsRef.current = null;
+      }
 
-          if (!parsed || typeof parsed !== "object") return;
+      setConnectionStatus("connecting");
 
-          if (parsed.type === "snapshot" && Array.isArray(parsed.data)) {
-            const records: ClearinghouseRecord[] = parsed.data;
-            if (typeof parsed.sequenceNumber === "number") {
-              setLastSequenceNumber(parsed.sequenceNumber);
-            }
-            setSnapshot(records);
-            onSnapshotRef.current?.(records);
-            return;
+      // Append auth token if provided
+      let connectUrl = url;
+      if (token) {
+        try {
+          const urlObj = new URL(
+            url,
+            typeof window !== "undefined" ? window.location.href : "http://localhost",
+          );
+          urlObj.searchParams.set("token", token);
+          connectUrl = urlObj.toString();
+        } catch {
+          connectUrl = url.includes("?")
+            ? `${url}&token=${encodeURIComponent(token)}`
+            : `${url}?token=${encodeURIComponent(token)}`;
+        }
+      }
+
+      try {
+        const socket = new WebSocket(connectUrl);
+        wsRef.current = socket;
+
+        socket.onopen = () => {
+          if (wsRef.current !== socket) return;
+          reconnectAttemptsRef.current = 0;
+          setConnectionStatus("connected");
+
+          // Subscribe to channel if required
+          if (channel && channel !== "ledger") {
+            sendMessage({ type: "subscribe", channel, ack: true });
           }
+        };
 
-          if (parsed.type === "delta") {
-            if (typeof parsed.sequenceNumber === "number") {
-              setLastSequenceNumber(parsed.sequenceNumber);
-            }
+        socket.onmessage = (event: MessageEvent) => {
+          if (wsRef.current !== socket) return;
 
-            let transaction: GridTransaction;
-            if (
-              parsed.transaction &&
-              Array.isArray(parsed.transaction.add) &&
-              Array.isArray(parsed.transaction.update) &&
-              Array.isArray(parsed.transaction.remove)
-            ) {
-              transaction = parsed.transaction as GridTransaction;
-            } else if (Array.isArray(parsed.deltas)) {
-              // Synthesize transaction from raw deltas
-              const add: ClearinghouseRecord[] = [];
-              const update: ClearinghouseRecord[] = [];
-              const remove: ClearinghouseRecord[] = [];
+          try {
+            const rawData = typeof event.data === "string" ? event.data : String(event.data);
+            const parsed = JSON.parse(rawData);
 
-              for (const delta of parsed.deltas) {
-                if (delta.type === "add") add.push(delta.data);
-                else if (delta.type === "update") update.push(delta.data);
-                else if (delta.type === "remove") remove.push(delta.data);
+            if (!parsed || typeof parsed !== "object") return;
+
+            if (parsed.type === "snapshot" && Array.isArray(parsed.data)) {
+              const records: ClearinghouseRecord[] = parsed.data;
+              if (typeof parsed.sequenceNumber === "number") {
+                setLastSequenceNumber((prev) => Math.max(prev, parsed.sequenceNumber));
               }
-
-              transaction = { add, update, remove };
-            } else {
+              // Clear stale deltas buffered before snapshot hydration
+              bufferedTransactionsRef.current = [];
+              setSnapshot(records);
+              onSnapshotRef.current?.(records);
               return;
             }
 
-            // High-performance streaming: decoupled from React state renders
-            // Buffer the transaction for AG Grid consumption
-            bufferedTransactionsRef.current.push(transaction);
+            if (parsed.type === "delta") {
+              if (typeof parsed.sequenceNumber === "number") {
+                setLastSequenceNumber((prev) => Math.max(prev, parsed.sequenceNumber));
+              }
 
-            // Immediately invoke callback (e.g. gridApi.applyTransactionAsync)
-            onTransactionRef.current?.(transaction);
+              let transaction: GridTransaction;
+              if (
+                parsed.transaction &&
+                Array.isArray(parsed.transaction.add) &&
+                Array.isArray(parsed.transaction.update) &&
+                Array.isArray(parsed.transaction.remove)
+              ) {
+                transaction = parsed.transaction as GridTransaction;
+              } else if (Array.isArray(parsed.deltas)) {
+                // Synthesize transaction from raw deltas
+                const add: ClearinghouseRecord[] = [];
+                const update: ClearinghouseRecord[] = [];
+                const remove: ClearinghouseRecord[] = [];
+
+                for (const delta of parsed.deltas) {
+                  if (delta?.data && typeof delta.data === "object") {
+                    if (delta.type === "add") add.push(delta.data);
+                    else if (delta.type === "update") update.push(delta.data);
+                    else if (delta.type === "remove") remove.push(delta.data);
+                  }
+                }
+
+                transaction = { add, update, remove };
+              } else {
+                return;
+              }
+
+              // High-performance streaming: decoupled from React state renders
+              // Buffer the transaction for AG Grid consumption (bounded size to prevent memory leaks)
+              if (bufferedTransactionsRef.current.length >= maxBufferSize) {
+                bufferedTransactionsRef.current.shift();
+              }
+              bufferedTransactionsRef.current.push(transaction);
+
+              // Immediately invoke callback (e.g. gridApi.applyTransactionAsync)
+              onTransactionRef.current?.(transaction);
+            }
+          } catch {
+            // Ignore invalid frames
           }
-        } catch {
-          // Ignore invalid frames
-        }
-      };
+        };
 
-      socket.onclose = () => {
-        if (wsRef.current !== socket) return;
-        wsRef.current = null;
+        socket.onclose = () => {
+          if (wsRef.current !== socket) return;
+          wsRef.current = null;
 
-        if (explicitDisconnectRef.current) {
-          setConnectionStatus("disconnected");
-          return;
-        }
+          if (explicitDisconnectRef.current) {
+            setConnectionStatus("disconnected");
+            return;
+          }
 
-        // Automatic RFC 6455 reconnection with exponential backoff & jitter
-        setConnectionStatus("reconnecting");
-        const attempt = reconnectAttemptsRef.current;
-        reconnectAttemptsRef.current = attempt + 1;
+          // Automatic RFC 6455 reconnection with exponential backoff & jitter
+          setConnectionStatus("reconnecting");
+          const attempt = reconnectAttemptsRef.current;
+          reconnectAttemptsRef.current = attempt + 1;
 
-        const baseDelay = Math.min(maxReconnectIntervalMs, reconnectIntervalMs * 2 ** attempt);
-        const jitter = Math.random() * 200;
-        const delay = baseDelay + jitter;
+          const baseDelay = Math.min(maxReconnectIntervalMs, reconnectIntervalMs * 2 ** attempt);
+          const jitter = Math.random() * 200;
+          const delay = baseDelay + jitter;
 
-        reconnectTimerRef.current = setTimeout(() => {
-          connect();
-        }, delay);
-      };
+          reconnectTimerRef.current = setTimeout(() => {
+            connect(true);
+          }, delay);
+        };
 
-      socket.onerror = () => {
-        // Socket errors typically bubble into onclose
-        if (wsRef.current === socket) {
-          try {
-            socket.close();
-          } catch {}
-        }
-      };
-    } catch {
-      setConnectionStatus("disconnected");
-    }
-  }, [
-    url,
-    token,
-    channel,
-    reconnectIntervalMs,
-    maxReconnectIntervalMs,
-    sendMessage,
-    clearReconnectTimer,
-  ]);
+        socket.onerror = () => {
+          // Socket errors typically bubble into onclose
+          if (wsRef.current === socket) {
+            try {
+              socket.close();
+            } catch {}
+          }
+        };
+      } catch {
+        setConnectionStatus("disconnected");
+      }
+    },
+    [
+      url,
+      token,
+      channel,
+      reconnectIntervalMs,
+      maxReconnectIntervalMs,
+      maxBufferSize,
+      sendMessage,
+      clearReconnectTimer,
+    ],
+  );
 
   const disconnect = useCallback(() => {
     explicitDisconnectRef.current = true;

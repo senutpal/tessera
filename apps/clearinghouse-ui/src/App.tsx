@@ -1,43 +1,117 @@
 import type React from "react";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ClearinghouseGrid, type ClearinghouseGridHandle } from "./components/ClearinghouseGrid.js";
 import { useClearinghouseSocket } from "./hooks/useClearinghouseSocket.js";
-import type { GridTransaction } from "./types.js";
+import type { ClearinghouseRecord, GridTransaction } from "./types.js";
 
 export const App: React.FC = () => {
   const gridRef = useRef<ClearinghouseGridHandle | null>(null);
+  const recordsRef = useRef<Map<string, ClearinghouseRecord>>(new Map());
+  const statsRafRef = useRef<number | null>(null);
 
-  const handleTransaction = useCallback((tx: GridTransaction) => {
-    if (gridRef.current) {
-      gridRef.current.applyTransaction(tx);
-    }
-  }, []);
+  const [stats, setStats] = useState({
+    pendingHitl: 0,
+    criticalRisk: 0,
+    totalVolume: 0,
+    totalCount: 0,
+  });
 
-  const { connectionStatus, isConnected, lastSequenceNumber, snapshot, connect, disconnect } =
-    useClearinghouseSocket({
-      url: "ws://localhost:3000/ws/clearinghouse",
-      autoConnect: true,
-      onTransaction: handleTransaction,
-    });
-
-  const stats = useMemo(() => {
+  const recalculateStats = useCallback(() => {
     let pendingHitl = 0;
     let criticalRisk = 0;
     let totalVolume = 0;
 
-    for (const item of snapshot) {
+    for (const item of recordsRef.current.values()) {
       if (item.hitlStatus === "PENDING_APPROVAL") pendingHitl++;
       if (item.riskScore > 70) criticalRisk++;
       if (typeof item.amount === "number") totalVolume += item.amount;
     }
 
-    return {
+    setStats({
       pendingHitl,
       criticalRisk,
       totalVolume,
-      totalCount: snapshot.length,
+      totalCount: recordsRef.current.size,
+    });
+  }, []);
+
+  const scheduleStatsUpdate = useCallback(() => {
+    if (typeof window === "undefined" || !window.requestAnimationFrame) {
+      recalculateStats();
+      return;
+    }
+    if (statsRafRef.current !== null) return;
+    statsRafRef.current = window.requestAnimationFrame(() => {
+      statsRafRef.current = null;
+      recalculateStats();
+    });
+  }, [recalculateStats]);
+
+  const handleTransaction = useCallback(
+    (tx: GridTransaction) => {
+      if (gridRef.current) {
+        gridRef.current.applyTransaction(tx);
+      }
+      for (const item of tx.add) {
+        recordsRef.current.set(item.transactionId, item);
+      }
+      for (const item of tx.update) {
+        recordsRef.current.set(item.transactionId, item);
+      }
+      for (const item of tx.remove) {
+        recordsRef.current.delete(item.transactionId);
+      }
+      scheduleStatsUpdate();
+    },
+    [scheduleStatsUpdate],
+  );
+
+  const handleSnapshot = useCallback(
+    (records: ClearinghouseRecord[]) => {
+      recordsRef.current.clear();
+      for (const item of records) {
+        recordsRef.current.set(item.transactionId, item);
+      }
+      recalculateStats();
+    },
+    [recalculateStats],
+  );
+
+  const defaultWsUrl =
+    typeof window !== "undefined" && window.location.host
+      ? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/clearinghouse`
+      : "ws://localhost:3000/ws/clearinghouse";
+  const wsUrl =
+    (typeof import.meta !== "undefined" &&
+      (import.meta as { env?: Record<string, string> }).env?.VITE_CLEARINGHOUSE_WS_URL) ||
+    defaultWsUrl;
+
+  const defaultApiUrl =
+    typeof window !== "undefined" &&
+    window.location.origin &&
+    !window.location.origin.startsWith("null")
+      ? window.location.origin
+      : "http://localhost:3000";
+  const apiBaseUrl =
+    (typeof import.meta !== "undefined" &&
+      (import.meta as { env?: Record<string, string> }).env?.VITE_CLEARINGHOUSE_API_URL) ||
+    defaultApiUrl;
+
+  const { connectionStatus, isConnected, lastSequenceNumber, snapshot, connect, disconnect } =
+    useClearinghouseSocket({
+      url: wsUrl,
+      autoConnect: true,
+      onSnapshot: handleSnapshot,
+      onTransaction: handleTransaction,
+    });
+
+  useEffect(() => {
+    return () => {
+      if (statsRafRef.current !== null && typeof window !== "undefined") {
+        window.cancelAnimationFrame(statsRafRef.current);
+      }
     };
-  }, [snapshot]);
+  }, []);
 
   return (
     <div className="min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col font-sans">
@@ -97,10 +171,18 @@ export const App: React.FC = () => {
 
           <button
             type="button"
-            onClick={isConnected ? disconnect : connect}
+            onClick={
+              isConnected ||
+              connectionStatus === "connecting" ||
+              connectionStatus === "reconnecting"
+                ? disconnect
+                : () => connect()
+            }
             className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 text-[11px] transition-colors"
           >
-            {isConnected ? "Disconnect" : "Connect"}
+            {isConnected || connectionStatus === "connecting" || connectionStatus === "reconnecting"
+              ? "Disconnect"
+              : "Connect"}
           </button>
         </div>
       </header>
@@ -143,7 +225,7 @@ export const App: React.FC = () => {
 
         <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 flex flex-col gap-1">
           <span className="text-slate-400 text-xs font-mono uppercase">Engine Latency SLA</span>
-          <span className="text-xl font-bold font-mono text-sky-400">&lt; 50 µs</span>
+          <span className="text-xl font-bold font-mono text-sky-400">Target &lt; 50 µs</span>
         </div>
       </section>
 
@@ -152,6 +234,7 @@ export const App: React.FC = () => {
         <ClearinghouseGrid
           ref={gridRef}
           rowData={snapshot}
+          apiBaseUrl={apiBaseUrl}
           className="w-full flex-1 min-h-[580px]"
         />
       </main>
