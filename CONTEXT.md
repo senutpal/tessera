@@ -39,6 +39,15 @@ A configurable risk scoring ceiling (typically $\ge 70/100$ or transaction value
 ### Cryptographic Webhook Ingestion & Verification
 The asynchronous event ingestion pipeline validating PayPal webhook notifications. Authenticates incoming notifications using byte-for-byte CRC32 hashing over raw request buffers and RSA signature verification against PayPal's whitelisted X.509 signing certificates (`^https://api(\-m)?\.(sandbox\.)?paypal\.com/`). Defends against replay attacks with 24-hour transmission ID idempotency caching and translates verified notifications (`PAYMENT.AUTHORIZATION.CREATED`, `PAYMENT.AUTHORIZATION.VOIDED`) into typed Clearinghouse domain events.
 
+### WebSocket Streaming Ledger Engine
+The real-time financial clearinghouse streaming server (`apps/clearinghouse-api`) broadcasting transactional deltas over RFC 6455 WebSockets with 30-second heartbeat ping/pong keep-alives and backpressure-aware client session management. Directly formats deltas for high-throughput UI consumption via AG Grid Enterprise (`applyTransactionAsync`).
+
+### AG Grid Delta Batch & Monotonic Hydration
+A coalesced transaction packet emitted by `GridDeltaTransformer` (`packages/event-bus`) converting raw domain events into batched `{ type: "add" | "update" | "remove", data: ClearinghouseRecord }` updates. Enriched with microsecond-precision timestamps (`timestampMicros`) and strictly monotonic sequence numbers (`sequenceNumber`) for initial client snapshot hydration and UI thread thrashing prevention.
+
+### Distributed Event Bus & Resilient Fallback
+The pub/sub event backbone coordinating domain events (`MandateVerified`, `EscrowLocked`, `TrackingUpdated`, `DisputeOpened`, `DisputeResolved`). Implements distributed multi-instance broadcasting via Redis Pub/Sub with automatic, seamless fallback to in-memory `EventEmitter` dispatching for local testing and broker resilience.
+
 
 ---
 
