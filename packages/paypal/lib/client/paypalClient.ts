@@ -1,7 +1,25 @@
+import { DisputeResolutionHandler } from "../disputes/disputeResolutionHandler.js";
+import { DisputesService } from "../disputes/disputesService.js";
+import { EvidencePackager } from "../disputes/evidencePackager.js";
 import { AuthorizationVoidService } from "../orders/authorizationVoidService.js";
 import { EscrowCaptureService } from "../orders/escrowCaptureService.js";
 import { OrdersEscrowService } from "../orders/ordersEscrowService.js";
 import { ShipmentTrackingService } from "../tracking/shipmentTrackingService.js";
+import type {
+  AcceptClaimOptions,
+  ClearinghouseDispute,
+  DisputeEscalationResult,
+  DisputeEvaluationContext,
+  DisputeEventSink,
+  DisputePolicyDecision,
+  DisputeResolutionPolicy,
+  DisputeResolutionResult,
+  DisputeSearchResult,
+  EscalateDisputeOptions,
+  EvidenceBundleInput,
+  EvidenceSubmissionResult,
+  ListDisputesOptions,
+} from "../types/disputes.js";
 import type {
   AuthorizeOrderOptions,
   CreateEscrowOrderOptions,
@@ -35,6 +53,9 @@ export class PayPalClient {
   public readonly voids: AuthorizationVoidService;
   public readonly tracking: ShipmentTrackingService;
   public readonly capture: EscrowCaptureService;
+  public readonly disputes: DisputesService;
+  public readonly evidencePackager: EvidencePackager;
+  public readonly disputeResolution: DisputeResolutionHandler;
 
   constructor(
     config: PayPalConfig,
@@ -42,6 +63,8 @@ export class PayPalClient {
       eventSink?: EscrowEventSink | undefined;
       trackingEventSink?: TrackingEventSink | undefined;
       captureEventSink?: CaptureEventSink | undefined;
+      disputeEventSink?: DisputeEventSink | undefined;
+      disputePolicy?: DisputeResolutionPolicy | undefined;
     } = {},
   ) {
     this.auth = new PayPalAuthClient(config);
@@ -51,6 +74,14 @@ export class PayPalClient {
       eventSink: options.trackingEventSink,
     });
     this.capture = new EscrowCaptureService(this.auth, { eventSink: options.captureEventSink });
+    this.disputes = new DisputesService(this.auth);
+    this.evidencePackager = new EvidencePackager(this.auth, {
+      eventSink: options.disputeEventSink,
+    });
+    this.disputeResolution = new DisputeResolutionHandler(this.auth, {
+      eventSink: options.disputeEventSink,
+      policy: options.disputePolicy,
+    });
   }
 
   /**
@@ -138,5 +169,52 @@ export class PayPalClient {
    */
   public async captureEscrow(options: EscrowCaptureOptions): Promise<EscrowCaptureResult> {
     return this.capture.captureEscrow(options);
+  }
+
+  /**
+   * Queries active customer disputes from PayPal Customer Disputes API v1.
+   */
+  public async listDisputes(options?: ListDisputesOptions): Promise<DisputeSearchResult> {
+    return this.disputes.listDisputes(options);
+  }
+
+  /**
+   * Retrieves full details for a customer dispute by ID.
+   */
+  public async getDispute(disputeId: string): Promise<ClearinghouseDispute> {
+    return this.disputes.getDispute(disputeId);
+  }
+
+  /**
+   * Assembles carrier tracking, signed AP2 mandate, and quote records and submits evidence.
+   */
+  public async provideDisputeEvidence(
+    input: EvidenceBundleInput,
+  ): Promise<EvidenceSubmissionResult> {
+    return this.evidencePackager.packageAndSubmitEvidence(input);
+  }
+
+  /**
+   * Accepts liability for a customer dispute, refunding the buyer immediately.
+   */
+  public async acceptDisputeClaim(options: AcceptClaimOptions): Promise<DisputeResolutionResult> {
+    return this.disputeResolution.acceptClaim(options);
+  }
+
+  /**
+   * Escalates a dispute to a PayPal claim for PayPal adjudication.
+   */
+  public async escalateDispute(options: EscalateDisputeOptions): Promise<DisputeEscalationResult> {
+    return this.disputeResolution.escalateDispute(options);
+  }
+
+  /**
+   * Evaluates clearinghouse policy rules against a dispute and executes autonomous resolution.
+   */
+  public async evaluateDisputePolicy(
+    dispute: ClearinghouseDispute,
+    context?: DisputeEvaluationContext,
+  ): Promise<DisputePolicyDecision> {
+    return this.disputeResolution.evaluatePolicyAndResolve(dispute, context);
   }
 }

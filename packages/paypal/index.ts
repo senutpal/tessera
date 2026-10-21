@@ -5,7 +5,17 @@
 // Core Client & Auth Engine
 export { PayPalAuthClient } from "./lib/client/paypalAuthClient.js";
 export { PayPalClient } from "./lib/client/paypalClient.js";
-
+export { DisputeResolutionHandler } from "./lib/disputes/disputeResolutionHandler.js";
+// Customer Disputes & Autonomous Resolution Engine
+export {
+  DisputesService,
+  normalizePayPalDispute,
+} from "./lib/disputes/disputesService.js";
+export {
+  buildDisputeEvidenceAuditNote,
+  computeEvidenceHash,
+  EvidencePackager,
+} from "./lib/disputes/evidencePackager.js";
 // Escrow Services
 export { AuthorizationVoidService } from "./lib/orders/authorizationVoidService.js";
 export { EscrowCaptureService } from "./lib/orders/escrowCaptureService.js";
@@ -16,6 +26,67 @@ export {
   TrackingStateMachine,
   type TrackingStateMachineOptions,
 } from "./lib/tracking/trackingStateMachine.js";
+export {
+  type AcceptClaimOptions,
+  type CarrierTrackingEvidence,
+  type Channel3QuoteEvidence,
+  type ClearinghouseDispute,
+  type ClearinghouseDisputeOutcome,
+  ClearinghouseDisputeStatus,
+  DisputeAction,
+  type DisputeEscalatedEvent,
+  type DisputeEscalationResult,
+  type DisputeEvaluationContext,
+  type DisputeEventSink,
+  type DisputeEvidenceSubmittedEvent,
+  type DisputePolicyDecision,
+  type DisputeResolutionPolicy,
+  type DisputeResolutionResult,
+  type DisputeResolvedEvent,
+  type DisputeSearchResult,
+  type EscalateDisputeOptions,
+  type EvidenceBundleInput,
+  type EvidenceDocument,
+  type EvidenceSubmissionResult,
+  type ListDisputesOptions,
+  type PayPalAcceptClaimType,
+  PayPalAcceptClaimTypeSchema,
+  type PayPalAcceptClaimWire,
+  PayPalAcceptClaimWireSchema,
+  type PayPalDisputeChannel,
+  PayPalDisputeChannelSchema,
+  type PayPalDisputedTransactionWire,
+  PayPalDisputedTransactionWireSchema,
+  type PayPalDisputeInfoWire,
+  PayPalDisputeInfoWireSchema,
+  type PayPalDisputeLifecycleStage,
+  PayPalDisputeLifecycleStageSchema,
+  type PayPalDisputeOutcomeCode,
+  PayPalDisputeOutcomeCodeSchema,
+  type PayPalDisputeOutcomeWire,
+  PayPalDisputeOutcomeWireSchema,
+  type PayPalDisputeReason,
+  PayPalDisputeReasonSchema,
+  PayPalDisputeSearchResponseSchema,
+  type PayPalDisputeSearchResponseWire,
+  type PayPalDisputeState,
+  PayPalDisputeStateSchema,
+  type PayPalDisputeStatus,
+  PayPalDisputeStatusSchema,
+  type PayPalDisputeWire,
+  PayPalDisputeWireSchema,
+  type PayPalEscalateWire,
+  PayPalEscalateWireSchema,
+  type PayPalEvidenceType,
+  PayPalEvidenceTypeSchema,
+  type PayPalProvideEvidenceWire,
+  PayPalProvideEvidenceWireSchema,
+  PayPalSubsequentActionResponseSchema,
+  type PayPalSubsequentActionResponseWire,
+  type PayPalTrackingInfoWire,
+  PayPalTrackingInfoWireSchema,
+  type SignedMandateEvidence,
+} from "./lib/types/disputes.js";
 // Schemas & Types
 export {
   type AuthorizeOrderOptions,
@@ -144,6 +215,21 @@ export {
 } from "./lib/webhooks/webhookSignatureVerifier.js";
 
 import { PayPalClient } from "./lib/client/paypalClient.js";
+import type {
+  AcceptClaimOptions,
+  ClearinghouseDispute,
+  DisputeEscalationResult,
+  DisputeEvaluationContext,
+  DisputeEventSink,
+  DisputePolicyDecision,
+  DisputeResolutionPolicy,
+  DisputeResolutionResult,
+  DisputeSearchResult,
+  EscalateDisputeOptions,
+  EvidenceBundleInput,
+  EvidenceSubmissionResult,
+  ListDisputesOptions,
+} from "./lib/types/disputes.js";
 import type {
   AuthorizeOrderOptions,
   CreateEscrowOrderOptions,
@@ -315,4 +401,78 @@ export async function routeWebhook(
   const verifier = config.verifier ?? getDefaultWebhookVerifier();
   const router = new WebhookRouter({ ...config, verifier });
   return router.handleWebhook(request);
+}
+
+/**
+ * High-level helper to query customer disputes from PayPal Customer Disputes API v1.
+ */
+export async function listDisputes(
+  config: PayPalConfig,
+  options?: ListDisputesOptions,
+): Promise<DisputeSearchResult> {
+  const client = new PayPalClient(config);
+  return client.listDisputes(options);
+}
+
+/**
+ * High-level helper to query details for a specific customer dispute.
+ */
+export async function getDispute(
+  config: PayPalConfig,
+  disputeId: string,
+): Promise<ClearinghouseDispute> {
+  const client = new PayPalClient(config);
+  return client.getDispute(disputeId);
+}
+
+/**
+ * High-level helper to assemble cryptographic evidence bundle and submit to PayPal.
+ */
+export async function provideDisputeEvidence(
+  config: PayPalConfig,
+  input: EvidenceBundleInput,
+  clientOptions?: { disputeEventSink?: DisputeEventSink | undefined },
+): Promise<EvidenceSubmissionResult> {
+  const client = new PayPalClient(config, clientOptions);
+  return client.provideDisputeEvidence(input);
+}
+
+/**
+ * High-level helper to accept liability for a customer dispute and issue a buyer refund.
+ */
+export async function acceptDisputeClaim(
+  config: PayPalConfig,
+  options: AcceptClaimOptions,
+  clientOptions?: { disputeEventSink?: DisputeEventSink | undefined },
+): Promise<DisputeResolutionResult> {
+  const client = new PayPalClient(config, clientOptions);
+  return client.acceptDisputeClaim(options);
+}
+
+/**
+ * High-level helper to escalate a dispute to a PayPal claim.
+ */
+export async function escalateDispute(
+  config: PayPalConfig,
+  options: EscalateDisputeOptions,
+  clientOptions?: { disputeEventSink?: DisputeEventSink | undefined },
+): Promise<DisputeEscalationResult> {
+  const client = new PayPalClient(config, clientOptions);
+  return client.escalateDispute(options);
+}
+
+/**
+ * High-level helper to evaluate clearinghouse dispute policy and execute automated actions.
+ */
+export async function evaluateDisputePolicy(
+  config: PayPalConfig,
+  dispute: ClearinghouseDispute,
+  context?: DisputeEvaluationContext,
+  clientOptions?: {
+    disputeEventSink?: DisputeEventSink | undefined;
+    disputePolicy?: DisputeResolutionPolicy | undefined;
+  },
+): Promise<DisputePolicyDecision> {
+  const client = new PayPalClient(config, clientOptions);
+  return client.evaluateDisputePolicy(dispute, context);
 }
