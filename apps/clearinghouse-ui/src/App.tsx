@@ -1,6 +1,9 @@
+import { AlertTriangle, Moon, ShieldAlert, Sun, TrendingUp, Zap } from "lucide-react";
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
+
 import { ClearinghouseGrid, type ClearinghouseGridHandle } from "./components/ClearinghouseGrid.js";
+import { TransactionDetailDrawer } from "./components/TransactionDetailDrawer.js";
 import { INITIAL_DEMO_RECORDS } from "./demoData.js";
 import { useClearinghouseSocket } from "./hooks/useClearinghouseSocket.js";
 import type { ClearinghouseRecord, GridTransaction } from "./types.js";
@@ -9,9 +12,48 @@ export const App: React.FC = () => {
   const gridRef = useRef<ClearinghouseGridHandle | null>(null);
   const recordsRef = useRef<Map<string, ClearinghouseRecord>>(new Map());
   const statsRafRef = useRef<number | null>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [simulationActive, setSimulationActive] = useState<boolean>(false);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [selectedRecord, setSelectedRecord] = useState<ClearinghouseRecord | null>(null);
   const simTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [seqNumber, setSeqNumber] = useState<number>(112);
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("tessera-theme");
+      if (saved === "light" || saved === "dark") return saved;
+      if (window.matchMedia?.("(prefers-color-scheme: light)").matches) return "light";
+    }
+    return "dark";
+  });
+
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      const root = document.documentElement;
+      if (theme === "dark") {
+        root.classList.add("dark");
+      } else {
+        root.classList.remove("dark");
+      }
+      try {
+        localStorage.setItem("tessera-theme", theme);
+      } catch {
+        // ignore storage error in sandboxed environment
+      }
+    }
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((curr) => (curr === "dark" ? "light" : "dark"));
+  }, []);
+
+  const showToast = useCallback((msg: string) => {
+    setToastMsg(msg);
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastMsg(null);
+    }, 3200);
+  }, []);
 
   const [stats, setStats] = useState({
     pendingHitl: 0,
@@ -61,9 +103,15 @@ export const App: React.FC = () => {
       }
       for (const item of tx.update) {
         recordsRef.current.set(item.transactionId, item);
+        setSelectedRecord((curr) =>
+          curr && curr.transactionId === item.transactionId ? item : curr,
+        );
       }
       for (const item of tx.remove) {
         recordsRef.current.delete(item.transactionId);
+        setSelectedRecord((curr) =>
+          curr && curr.transactionId === item.transactionId ? null : curr,
+        );
       }
       scheduleStatsUpdate();
     },
@@ -114,7 +162,7 @@ export const App: React.FC = () => {
   const { connectionStatus, isConnected, lastSequenceNumber, snapshot, connect, disconnect } =
     useClearinghouseSocket({
       url: wsUrl,
-      autoConnect: false, // Don't block UI with continuous reconnect loops when standalone
+      autoConnect: false,
       onSnapshot: handleSnapshot,
       onTransaction: handleTransaction,
     });
@@ -129,8 +177,12 @@ export const App: React.FC = () => {
         updatedAt: new Date().toISOString(),
       };
       handleTransaction({ add: [], update: [updated], remove: [] });
+      setSelectedRecord((curr) =>
+        curr && curr.transactionId === record.transactionId ? updated : curr,
+      );
+      showToast(`Counter-signature approved for ${record.transactionId}`);
     },
-    [handleTransaction],
+    [handleTransaction, showToast],
   );
 
   const handleVoid = useCallback(
@@ -143,8 +195,12 @@ export const App: React.FC = () => {
         updatedAt: new Date().toISOString(),
       };
       handleTransaction({ add: [], update: [updated], remove: [] });
+      setSelectedRecord((curr) =>
+        curr && curr.transactionId === record.transactionId ? updated : curr,
+      );
+      showToast(`Escrow voided for ${record.transactionId}`);
     },
-    [handleTransaction],
+    [handleTransaction, showToast],
   );
 
   const handleDispute = useCallback(
@@ -156,8 +212,12 @@ export const App: React.FC = () => {
         updatedAt: new Date().toISOString(),
       };
       handleTransaction({ add: [], update: [updated], remove: [] });
+      setSelectedRecord((curr) =>
+        curr && curr.transactionId === record.transactionId ? updated : curr,
+      );
+      showToast(`Dispute escalation filed for ${record.transactionId}`);
     },
-    [handleTransaction],
+    [handleTransaction, showToast],
   );
 
   // Live streaming delta simulator
@@ -236,86 +296,117 @@ export const App: React.FC = () => {
         window.cancelAnimationFrame(statsRafRef.current);
       }
       if (simTimerRef.current) clearInterval(simTimerRef.current);
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     };
   }, []);
 
   const displaySequence = isConnected ? lastSequenceNumber : seqNumber;
   const initialRowData = snapshot.length > 0 ? snapshot : INITIAL_DEMO_RECORDS;
 
+  const handleFilterClick = (filterTerm: string) => {
+    if (gridRef.current) {
+      gridRef.current.setQuickFilter(filterTerm);
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col font-sans">
-      {/* Top Navigation / Status Header */}
-      <header className="border-b border-slate-800 bg-[#0F172A]/80 backdrop-blur px-6 py-3.5 flex items-center justify-between">
+    <div className="min-h-screen bg-zinc-50 dark:bg-[#09090b] text-zinc-900 dark:text-zinc-100 flex flex-col font-sans selection:bg-zinc-200 dark:selection:bg-zinc-800 selection:text-zinc-900 dark:selection:text-zinc-100 antialiased transition-colors duration-150">
+      {/* Top Header / Status Bar */}
+      <header className="border-b border-zinc-200 dark:border-zinc-800 bg-white/90 dark:bg-zinc-950/80 backdrop-blur-md px-6 py-3 flex flex-wrap items-center justify-between gap-4 sticky top-0 z-20 transition-colors duration-150">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-sky-900/30">
-            T
+          {/* Tessera Polygonal Brand Logo */}
+          <div className="relative w-7 h-7 rounded-lg bg-zinc-900 dark:bg-zinc-100 flex items-center justify-center shadow-sm">
+            <div className="w-3 h-3 border-2 border-emerald-500 dark:border-emerald-600 rotate-45 rounded-[1.5px]" />
           </div>
-          <div>
-            <h1 className="text-sm font-semibold tracking-wide text-slate-100">
-              TESSERA INSTITUTIONAL CLEARINGHOUSE
-            </h1>
-            <p className="text-[11px] font-mono text-slate-400">
-              High-Frequency AG Grid Enterprise Supervisor Terminal
-            </p>
+
+          <div className="flex flex-col">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold tracking-[0.2em] font-mono text-zinc-900 dark:text-zinc-100 uppercase">
+                TESSERA
+              </span>
+              <span className="text-zinc-400 dark:text-zinc-600 font-mono text-xs">/</span>
+              <span className="text-xs text-zinc-700 dark:text-zinc-300 font-sans font-medium tracking-tight">
+                Clearinghouse Institutional Suite
+              </span>
+              <span className="ml-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-800 font-medium">
+                AP2 v1
+              </span>
+            </div>
+            <span className="text-[10px] text-zinc-500 font-mono tracking-wider">
+              AUTONOMOUS SPENDING CONTROL & ESCROW TELEMETRY
+            </span>
           </div>
         </div>
 
-        {/* Real-Time Telemetry Bar */}
-        <div className="flex items-center gap-4 text-xs font-mono">
+        {/* Real-Time Telemetry & Controls */}
+        <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
           {/* Simulation Toggle */}
           <button
             type="button"
             onClick={() => setSimulationActive((prev) => !prev)}
-            className={`px-3 py-1 rounded text-[11px] font-sans font-medium transition-all border flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-all duration-150 border flex items-center gap-2 active:scale-[0.98] ${
               simulationActive
-                ? "bg-sky-500/20 text-sky-300 border-sky-500 shadow-sm shadow-sky-500/20"
-                : "bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700"
+                ? "bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/35"
+                : "bg-white hover:bg-zinc-100 text-zinc-700 border-zinc-200 dark:bg-zinc-900 dark:hover:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-800 shadow-sm"
             }`}
           >
             <span
               className={`w-2 h-2 rounded-full ${
-                simulationActive ? "bg-sky-400 animate-ping" : "bg-slate-500"
+                simulationActive
+                  ? "bg-emerald-500 dark:bg-emerald-400 animate-ping"
+                  : "bg-zinc-400 dark:bg-zinc-500"
               }`}
             />
-            {simulationActive ? "Streaming Active (Stop)" : "Simulate Live Feed"}
+            <span className="font-medium">
+              {simulationActive ? "Feed Streaming (Pause)" : "Simulate Live Ingestion"}
+            </span>
           </button>
 
-          <div className="flex items-center gap-2">
-            <span className="text-slate-500">SEQ:</span>
-            <span className="text-sky-400 font-semibold">
+          {/* Sequence Monotonic Pill */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 shadow-sm">
+            <span className="text-zinc-400 dark:text-zinc-500 text-[10px] font-mono font-semibold tracking-wider">
+              SEQ
+            </span>
+            <span className="text-zinc-800 dark:text-zinc-200 font-mono text-xs font-medium tabular-nums">
               #{displaySequence.toString().padStart(6, "0")}
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-slate-500">RECORDS:</span>
-            <span className="text-slate-300 font-semibold">{stats.totalCount}</span>
-          </div>
-
-          {/* Connection Status Pill */}
-          <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800">
-            <span
-              className={`w-2 h-2 rounded-full ${
-                isConnected
-                  ? "bg-emerald-400 animate-pulse"
-                  : connectionStatus === "reconnecting"
-                    ? "bg-amber-400 animate-ping"
-                    : "bg-slate-500"
-              }`}
-            />
-            <span
-              className={`text-[11px] font-medium uppercase tracking-wider ${
-                isConnected
-                  ? "text-emerald-400"
-                  : connectionStatus === "reconnecting"
-                    ? "text-amber-400"
-                    : "text-slate-400"
-              }`}
-            >
-              {isConnected ? "WS Live" : "Demo Standalone"}
+          {/* Record Volume Pill */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 shadow-sm">
+            <span className="text-zinc-400 dark:text-zinc-500 text-[10px] font-mono font-semibold tracking-wider">
+              RECORDS
+            </span>
+            <span className="text-zinc-800 dark:text-zinc-200 font-mono text-xs font-medium tabular-nums">
+              {stats.totalCount}
             </span>
           </div>
 
+          {/* Connection Status Pill */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 shadow-sm">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                isConnected
+                  ? "bg-emerald-500 dark:bg-emerald-400"
+                  : connectionStatus === "reconnecting"
+                    ? "bg-amber-500 dark:bg-amber-400 animate-pulse"
+                    : "bg-zinc-400 dark:bg-zinc-500"
+              }`}
+            />
+            <span
+              className={`text-[11px] font-mono font-medium uppercase tracking-wider ${
+                isConnected
+                  ? "text-emerald-700 dark:text-emerald-400"
+                  : connectionStatus === "reconnecting"
+                    ? "text-amber-700 dark:text-amber-400"
+                    : "text-zinc-600 dark:text-zinc-400"
+              }`}
+            >
+              {isConnected ? "WS Live Rail" : "Stand-Alone Demo"}
+            </span>
+          </div>
+
+          {/* Connect / Disconnect WS Button */}
           <button
             type="button"
             onClick={
@@ -325,54 +416,191 @@ export const App: React.FC = () => {
                 ? disconnect
                 : () => connect()
             }
-            className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 text-[11px] transition-colors"
+            className="px-3 py-1.5 bg-white hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100 rounded-lg border border-zinc-200 dark:border-zinc-800 text-xs font-mono transition-all active:scale-[0.98] font-medium shadow-sm"
           >
             {isConnected || connectionStatus === "connecting" || connectionStatus === "reconnecting"
               ? "Disconnect"
               : "Connect WS"}
           </button>
+
+          {/* Theme Switcher Toggle */}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            aria-label="Toggle color theme"
+            className="p-1.5 bg-white hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 rounded-lg border border-zinc-200 dark:border-zinc-800 transition-all active:scale-[0.96] shadow-sm flex items-center justify-center"
+          >
+            {theme === "dark" ? (
+              <Sun className="w-4 h-4 text-zinc-400 group-hover:text-zinc-100" />
+            ) : (
+              <Moon className="w-4 h-4 text-zinc-600 group-hover:text-zinc-900" />
+            )}
+          </button>
         </div>
       </header>
 
-      {/* KPI Stats Strip */}
-      <section className="px-6 py-4 grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 flex flex-col gap-1">
-          <span className="text-slate-400 text-xs font-mono uppercase">Total Monitored Volume</span>
-          <span className="text-xl font-bold font-mono text-emerald-400">
-            {new Intl.NumberFormat("en-US", {
-              style: "currency",
-              currency: "USD",
-            }).format(stats.totalVolume / 100)}
-          </span>
-        </div>
+      {/* KPI Bento Strip: Crisp 1px Neutral Borders & Clean Whitespace */}
+      <section className="px-6 py-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Card 1: Total Monitored Escrow Volume */}
+          <div className="p-5 rounded-xl bg-white dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col justify-between gap-3 h-full hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-150">
+            <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400 text-[11px] font-mono uppercase tracking-wider">
+              <span className="flex items-center gap-1.5 font-semibold">
+                <TrendingUp className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                Total Monitored Escrow
+              </span>
+              <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400" />
+            </div>
 
-        <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 flex flex-col gap-1">
-          <span className="text-slate-400 text-xs font-mono uppercase">Pending HITL Approvals</span>
-          <span
-            className={`text-xl font-bold font-mono ${
-              stats.pendingHitl > 0 ? "text-amber-400 animate-pulse" : "text-slate-300"
-            }`}
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-2xl lg:text-3xl font-semibold font-mono tracking-tight tabular-nums text-zinc-900 dark:text-zinc-100">
+                {new Intl.NumberFormat("en-US", {
+                  style: "currency",
+                  currency: "USD",
+                }).format(stats.totalVolume / 100)}
+              </span>
+              <span className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-500/20 font-medium">
+                +18.4% 24h
+              </span>
+            </div>
+
+            {/* Mini Sparkline SVG */}
+            <div className="flex items-center justify-between pt-2 border-t border-zinc-100 dark:border-zinc-800/80">
+              <span className="text-[11px] text-zinc-500 font-sans">
+                PayPal Orders v2 Auth Holds
+              </span>
+              <svg
+                aria-hidden="true"
+                className="w-16 h-4 text-emerald-600/70 dark:text-emerald-400/70"
+                viewBox="0 0 64 16"
+                fill="none"
+              >
+                <path
+                  d="M1 13L12 11L24 14L36 7L48 9L63 2"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </div>
+          </div>
+
+          {/* Card 2: Pending HITL Approvals */}
+          <button
+            type="button"
+            onClick={() => handleFilterClick("PENDING_APPROVAL")}
+            className="text-left w-full p-5 rounded-xl bg-white dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col justify-between gap-3 h-full hover:border-amber-400/60 dark:hover:border-amber-500/40 cursor-pointer transition-all duration-150 group"
           >
-            {stats.pendingHitl}
-          </span>
-        </div>
+            <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400 text-[11px] font-mono uppercase tracking-wider">
+              <span className="flex items-center gap-1.5 font-semibold">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                Pending HITL Approvals
+              </span>
+              {stats.pendingHitl > 0 ? (
+                <span className="w-2 h-2 rounded-full bg-amber-500 dark:bg-amber-400 animate-pulse" />
+              ) : (
+                <span className="w-2 h-2 rounded-full bg-zinc-300 dark:bg-zinc-600" />
+              )}
+            </div>
 
-        <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 flex flex-col gap-1">
-          <span className="text-slate-400 text-xs font-mono uppercase">
-            Critical Risk Anomalies
-          </span>
-          <span
-            className={`text-xl font-bold font-mono ${
-              stats.criticalRisk > 0 ? "text-rose-400 animate-pulse" : "text-slate-300"
-            }`}
+            <div className="flex items-baseline gap-2.5">
+              <span
+                className={`text-2xl lg:text-3xl font-semibold font-mono tracking-tight tabular-nums ${
+                  stats.pendingHitl > 0
+                    ? "text-amber-600 dark:text-amber-400"
+                    : "text-zinc-800 dark:text-zinc-200"
+                }`}
+              >
+                {stats.pendingHitl}
+              </span>
+              {stats.pendingHitl > 0 && (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-500/25 uppercase tracking-wider font-semibold">
+                  Action Required
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-zinc-100 dark:border-zinc-800/80 text-[11px]">
+              <span className="text-zinc-500 font-sans">Threshold ≥ $250.00 / Risk ≥ 70</span>
+              <span className="text-amber-600 dark:text-amber-400/80 font-mono text-[10px] group-hover:translate-x-0.5 transition-transform">
+                Filter queue →
+              </span>
+            </div>
+          </button>
+
+          {/* Card 3: Critical Risk Anomalies */}
+          <button
+            type="button"
+            onClick={() => handleFilterClick("CRITICAL")}
+            className="text-left w-full p-5 rounded-xl bg-white dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col justify-between gap-3 h-full hover:border-rose-400/60 dark:hover:border-rose-500/40 cursor-pointer transition-all duration-150 group"
           >
-            {stats.criticalRisk}
-          </span>
-        </div>
+            <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400 text-[11px] font-mono uppercase tracking-wider">
+              <span className="flex items-center gap-1.5 font-semibold">
+                <ShieldAlert className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400" />
+                Critical Risk Anomalies
+              </span>
+              {stats.criticalRisk > 0 ? (
+                <span className="w-2 h-2 rounded-full bg-rose-500 dark:bg-rose-400 animate-pulse" />
+              ) : (
+                <span className="w-2 h-2 rounded-full bg-zinc-300 dark:bg-zinc-600" />
+              )}
+            </div>
 
-        <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 flex flex-col gap-1">
-          <span className="text-slate-400 text-xs font-mono uppercase">Engine Latency SLA</span>
-          <span className="text-xl font-bold font-mono text-sky-400">Target &lt; 50 µs</span>
+            <div className="flex items-baseline gap-2.5">
+              <span
+                className={`text-2xl lg:text-3xl font-semibold font-mono tracking-tight tabular-nums ${
+                  stats.criticalRisk > 0
+                    ? "text-rose-600 dark:text-rose-400"
+                    : "text-zinc-800 dark:text-zinc-200"
+                }`}
+              >
+                {stats.criticalRisk}
+              </span>
+              {stats.criticalRisk > 0 && (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-50 dark:bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-500/25 uppercase tracking-wider font-semibold">
+                  High Severity
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-zinc-100 dark:border-zinc-800/80 text-[11px]">
+              <span className="text-zinc-500 font-sans">Autonomous circuit breaker active</span>
+              <span className="text-rose-600 dark:text-rose-400/80 font-mono text-[10px] group-hover:translate-x-0.5 transition-transform">
+                Review risks →
+              </span>
+            </div>
+          </button>
+
+          {/* Card 4: Engine Settlement Latency */}
+          <div className="p-5 rounded-xl bg-white dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col justify-between gap-3 h-full hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-150">
+            <div className="flex items-center justify-between text-zinc-500 dark:text-zinc-400 text-[11px] font-mono uppercase tracking-wider">
+              <span className="flex items-center gap-1.5 font-semibold">
+                <Zap className="w-3.5 h-3.5 text-sky-600 dark:text-cyan-400" />
+                Engine Latency SLA
+              </span>
+              <span className="w-2 h-2 rounded-full bg-sky-500 dark:bg-cyan-400" />
+            </div>
+
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-2xl lg:text-3xl font-semibold font-mono tracking-tight tabular-nums text-zinc-900 dark:text-zinc-100">
+                &lt; 50 µs
+              </span>
+              <span className="text-[11px] font-mono text-sky-700 dark:text-cyan-400 bg-sky-50 dark:bg-cyan-500/10 px-2 py-0.5 rounded border border-sky-200 dark:border-cyan-500/20 font-medium">
+                p99: 38 µs
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-zinc-100 dark:border-zinc-800/80">
+              <span className="text-[11px] text-zinc-500 font-sans">
+                Zero-loss ring buffer ingestion
+              </span>
+              <span className="text-zinc-500 dark:text-zinc-400 font-mono text-[10px]">
+                100% Uptime
+              </span>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -382,12 +610,37 @@ export const App: React.FC = () => {
           ref={gridRef}
           rowData={initialRowData}
           apiBaseUrl={apiBaseUrl}
+          theme={theme}
           onApprove={handleApprove}
           onVoid={handleVoid}
           onDispute={handleDispute}
-          className="w-full flex-1 min-h-[580px]"
+          onRowClicked={(record) => setSelectedRecord(record)}
+          className="w-full h-[660px]"
         />
       </main>
+
+      {/* Slide-Out Inspector Drawer for Selected Transaction */}
+      {selectedRecord && (
+        <TransactionDetailDrawer
+          record={selectedRecord}
+          onClose={() => setSelectedRecord(null)}
+          onApprove={handleApprove}
+          onVoid={handleVoid}
+          onDispute={handleDispute}
+        />
+      )}
+
+      {/* Subtle Toast Notification Pill */}
+      {toastMsg && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-4 py-2 rounded-full bg-white/95 dark:bg-zinc-900/95 border border-zinc-200 dark:border-zinc-800 text-xs font-mono text-zinc-800 dark:text-zinc-100 shadow-xl backdrop-blur-xl transition-all duration-200 animate-in fade-in slide-in-from-bottom-2"
+        >
+          <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400 shrink-0" />
+          <span className="font-medium">{toastMsg}</span>
+        </div>
+      )}
     </div>
   );
 };

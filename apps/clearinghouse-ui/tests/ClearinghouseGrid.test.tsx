@@ -11,7 +11,8 @@ import {
 } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import { App } from "../src/App.js";
+import { TransactionDetailDrawer } from "../src/components/TransactionDetailDrawer.js";
 import {
   ActionCellRenderer,
   ClearinghouseGrid,
@@ -726,6 +727,85 @@ describe("AG Grid Enterprise Clearinghouse Dashboard UI", () => {
       expect(result.current.getBufferedTransactions()).toHaveLength(0);
       expect(result.current.snapshot).toHaveLength(1);
       expect(result.current.lastSequenceNumber).toBe(10);
+    });
+  });
+
+  describe("Minimalist UI & Theme System (Light / Dark Mode & Responsive Layout)", () => {
+    it("renders ClearinghouseGrid with light theme class when theme='light' is passed", () => {
+      render(<ClearinghouseGrid theme="light" rowData={[mockRecordLow]} />);
+      const grid = screen.getByTestId("clearinghouse-grid");
+      expect(grid.className).toContain("ag-theme-quartz");
+      expect(grid.className).not.toContain("ag-theme-quartz-dark");
+    });
+
+    it("renders ClearinghouseGrid with dark theme class by default", () => {
+      render(<ClearinghouseGrid rowData={[mockRecordLow]} />);
+      const grid = screen.getByTestId("clearinghouse-grid");
+      expect(grid.className).toContain("ag-theme-quartz-dark");
+    });
+
+    it("renders TransactionDetailDrawer with formatted currency, risk score, and action triggers", async () => {
+      const onApprove = vi.fn().mockResolvedValue(undefined);
+      const onVoid = vi.fn().mockResolvedValue(undefined);
+      const onDispute = vi.fn().mockResolvedValue(undefined);
+      const onClose = vi.fn();
+
+      render(
+        <TransactionDetailDrawer
+          record={mockRecordElevated}
+          onClose={onClose}
+          onApprove={onApprove}
+          onVoid={onVoid}
+          onDispute={onDispute}
+        />,
+      );
+
+      expect(screen.getByText("tx-elevated-002")).toBeInTheDocument();
+      expect(screen.getByText("$750.00")).toBeInTheDocument();
+      expect(screen.getByText("Score 55/100 · ELEVATED")).toBeInTheDocument();
+      expect(screen.getByText("man-002")).toBeInTheDocument();
+      expect(screen.getByText("merchant-b.com")).toBeInTheDocument();
+
+      const approveBtn = screen.getByRole("button", { name: /approve/i });
+      fireEvent.click(approveBtn);
+
+      await waitFor(() => {
+        expect(onApprove).toHaveBeenCalledWith(mockRecordElevated);
+      });
+    });
+
+    it("dismisses TransactionDetailDrawer when backdrop is clicked or Escape key is pressed", () => {
+      const onClose = vi.fn();
+      const { rerender } = render(
+        <TransactionDetailDrawer record={mockRecordElevated} onClose={onClose} />,
+      );
+
+      // Click on backdrop
+      const backdrop = screen.getByTestId("drawer-backdrop");
+      expect(backdrop).toBeInTheDocument();
+      fireEvent.click(backdrop);
+      expect(onClose).toHaveBeenCalledTimes(1);
+
+      // Press Escape key
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(onClose).toHaveBeenCalledTimes(2);
+
+      // Verify drawer does not render when record is null
+      rerender(<TransactionDetailDrawer record={null} onClose={onClose} />);
+      expect(screen.queryByTestId("transaction-detail-drawer")).not.toBeInTheDocument();
+    });
+
+    it("toggles light and dark theme mode in App component", async () => {
+      render(<App />);
+
+      const themeBtn = screen.getByRole("button", { name: /toggle color theme/i });
+      expect(themeBtn).toBeInTheDocument();
+
+      // Click to toggle theme
+      fireEvent.click(themeBtn);
+
+      // Verify toggle button remains accessible and functional
+      expect(themeBtn).toBeInTheDocument();
     });
   });
 });

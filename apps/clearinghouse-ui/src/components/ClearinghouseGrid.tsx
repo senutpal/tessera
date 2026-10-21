@@ -66,9 +66,11 @@ export async function generateAuditBundle(
 export interface ClearinghouseGridProps {
   rowData?: ClearinghouseRecord[];
   apiBaseUrl?: string;
+  theme?: "dark" | "light";
   onApprove?: (record: ClearinghouseRecord) => Promise<void>;
   onVoid?: (record: ClearinghouseRecord) => Promise<void>;
   onDispute?: (record: ClearinghouseRecord) => Promise<void>;
+  onRowClicked?: (record: ClearinghouseRecord) => void;
   onGridReady?: (params: GridReadyEvent<ClearinghouseRecord>) => void;
   className?: string;
 }
@@ -86,9 +88,11 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
     const {
       rowData,
       apiBaseUrl = "http://localhost:3000",
+      theme = "dark",
       onApprove,
       onVoid,
       onDispute,
+      onRowClicked,
       onGridReady: onGridReadyProp,
       className = "w-full h-[600px]",
     } = props;
@@ -243,65 +247,83 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
         {
           field: "transactionId",
           headerName: "Tx ID",
-          width: 150,
+          width: 120,
+          minWidth: 110,
           pinned: "left",
           filter: "agTextColumnFilter",
-          cellClass: "font-mono text-xs text-sky-400 font-semibold",
+          cellClass:
+            "font-mono text-xs text-zinc-700 dark:text-zinc-300 font-semibold tracking-tight cursor-pointer",
         },
         {
           field: "mandateId",
           headerName: "Mandate ID",
-          width: 150,
+          width: 175,
+          minWidth: 155,
           filter: "agTextColumnFilter",
-          cellClass: "font-mono text-xs text-slate-300",
+          cellClass: "font-mono text-xs text-zinc-500 dark:text-zinc-400 cursor-pointer",
         },
         {
           field: "merchantDomain",
           headerName: "Merchant Domain",
-          width: 180,
+          width: 185,
+          minWidth: 165,
+          flex: 1.2,
           enableRowGroup: true,
           filter: "agTextColumnFilter",
-          cellClass: "font-medium text-slate-200",
+          cellClass: "font-medium text-xs text-zinc-800 dark:text-zinc-200 cursor-pointer",
         },
         {
           field: "agentId",
           headerName: "Agent ID",
-          width: 140,
+          width: 150,
+          minWidth: 130,
           filter: "agTextColumnFilter",
-          cellClass: "font-mono text-xs text-slate-400",
+          cellClass: "font-mono text-xs text-zinc-500 dark:text-zinc-400 cursor-pointer",
         },
         {
           field: "amount",
           headerName: "Amount",
-          width: 130,
+          width: 115,
+          minWidth: 105,
+          headerClass: "ag-right-aligned-header",
           filter: "agNumberColumnFilter",
           valueFormatter: formatCurrency,
-          cellClass: "font-mono font-semibold text-right text-emerald-400",
+          cellClass:
+            "font-mono font-semibold text-right tabular-nums text-emerald-700 dark:text-emerald-400 cursor-pointer",
         },
         {
           field: "currency",
           headerName: "Cur",
-          width: 80,
-          cellClass: "text-center text-slate-400 text-xs font-mono",
+          width: 65,
+          minWidth: 60,
+          filter: false,
+          floatingFilter: false,
+          cellClass:
+            "text-center text-zinc-500 dark:text-zinc-400 text-xs font-mono cursor-pointer",
         },
         {
           field: "clearinghouseState",
           headerName: "Clearinghouse State",
-          width: 180,
+          width: 200,
+          minWidth: 185,
+          flex: 1,
           filter: "agTextColumnFilter",
           cellRenderer: StatusBadgeRenderer,
         },
         {
           field: "escrowStatus",
           headerName: "Escrow Status",
-          width: 180,
+          width: 185,
+          minWidth: 175,
+          flex: 1,
           filter: "agTextColumnFilter",
           cellRenderer: StatusBadgeRenderer,
         },
         {
           field: "riskScore",
           headerName: "Risk Heatmap",
-          width: 170,
+          width: 145,
+          minWidth: 140,
           filter: "agNumberColumnFilter",
           sortable: true,
           cellRenderer: RiskCellRenderer,
@@ -310,21 +332,25 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
         {
           field: "hitlStatus",
           headerName: "HITL Status",
-          width: 160,
+          width: 150,
+          minWidth: 140,
           filter: "agTextColumnFilter",
           cellRenderer: StatusBadgeRenderer,
         },
         {
           field: "createdAt",
           headerName: "Timestamp",
-          width: 170,
+          width: 145,
+          minWidth: 135,
           valueFormatter: formatDate,
-          cellClass: "font-mono text-xs text-slate-400",
+          cellClass:
+            "font-mono text-xs text-zinc-500 dark:text-zinc-400 tabular-nums cursor-pointer",
         },
         {
           colId: "actions",
           headerName: "Supervisor Actions",
-          minWidth: 290,
+          minWidth: 295,
+          width: 300,
           pinned: "right",
           sortable: false,
           filter: false,
@@ -339,8 +365,7 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
         filter: true,
         resizable: true,
         floatingFilter: true,
-        flex: 1,
-        minWidth: 100,
+        minWidth: 80,
       };
     }, []);
 
@@ -358,27 +383,90 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
       [],
     );
 
+    const applyQuickFilter = useCallback((val: string) => {
+      setQuickFilterState(val);
+      if (gridApiRef.current) {
+        gridApiRef.current.setGridOption("quickFilterText", val);
+      }
+    }, []);
+
+    const filterChips = [
+      { id: "all", label: "All Records", value: "" },
+      { id: "hitl", label: "Pending HITL", value: "PENDING_APPROVAL" },
+      { id: "critical", label: "Critical Risk", value: "CRITICAL" },
+      { id: "escrow", label: "In Escrow", value: "ESCROW" },
+      { id: "settled", label: "Settled", value: "SETTLED" },
+    ];
+
     return (
-      <div data-testid="clearinghouse-grid-container" className="flex flex-col gap-2 w-full">
-        {/* Institutional Top Control Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 bg-slate-900 border border-slate-800 rounded-t-lg">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-xs font-mono font-semibold text-slate-300 uppercase tracking-wider">
-                Clearinghouse Ledger
+      <div
+        data-testid="clearinghouse-grid-container"
+        className="flex flex-col w-full rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/80 shadow-sm overflow-hidden"
+      >
+        {/* Institutional Minimalist Control Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-3 bg-zinc-50/70 dark:bg-zinc-900/60 border-b border-zinc-200 dark:border-zinc-800">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 pr-3 border-r border-zinc-200 dark:border-zinc-800">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400" />
+              <span className="text-xs font-mono font-semibold text-zinc-800 dark:text-zinc-200 uppercase tracking-wider">
+                Institutional Ledger
               </span>
             </div>
 
-            <div className="relative">
+            {/* Quick Filter Search Box */}
+            <div className="relative flex items-center">
+              <svg
+                aria-hidden="true"
+                className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 absolute left-3 pointer-events-none"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.75}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
+                />
+              </svg>
               <input
                 type="text"
                 data-testid="quick-filter-input"
                 value={quickFilter}
                 onChange={handleQuickFilterChange}
-                placeholder="Search ledger..."
-                className="bg-slate-950 border border-slate-800 rounded px-2.5 py-1 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500 font-mono w-56"
+                placeholder="Filter ledger (mandate, merchant, agent)..."
+                className="bg-white dark:bg-zinc-950/90 border border-zinc-200 dark:border-zinc-800 rounded-lg pl-9 pr-8 py-1.5 text-xs text-zinc-900 dark:text-zinc-200 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-600 font-mono w-72 transition-colors"
               />
+              {quickFilter ? (
+                <button
+                  type="button"
+                  onClick={() => applyQuickFilter("")}
+                  className="absolute right-2 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 text-xs px-1"
+                >
+                  ✕
+                </button>
+              ) : null}
+            </div>
+
+            {/* Preset Category Filter Chips */}
+            <div className="hidden sm:flex items-center gap-1.5 pl-1">
+              {filterChips.map((chip) => {
+                const isActive = quickFilter === chip.value;
+                return (
+                  <button
+                    key={chip.id}
+                    type="button"
+                    onClick={() => applyQuickFilter(chip.value)}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-mono transition-all duration-150 border active:scale-[0.97] ${
+                      isActive
+                        ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 border-zinc-900 dark:border-zinc-100 font-medium"
+                        : "bg-white dark:bg-zinc-900/60 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 border-zinc-200 dark:border-zinc-800"
+                    }`}
+                  >
+                    {chip.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -387,23 +475,54 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
               type="button"
               data-testid="export-csv-btn"
               onClick={() => exportCsv()}
-              className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono rounded border border-slate-700 transition-colors flex items-center gap-1.5"
+              className="px-3 py-1.5 bg-white hover:bg-zinc-100 dark:bg-zinc-900 dark:hover:bg-zinc-800 text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100 text-xs font-mono rounded-lg border border-zinc-200 dark:border-zinc-800 transition-all active:scale-[0.98] flex items-center gap-1.5 shadow-sm"
             >
+              <svg
+                aria-hidden="true"
+                className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.75}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.5V16.5M7.5 12l4.5 4.5m0 0l4.5-4.5M12 3v13.5"
+                />
+              </svg>
               <span>Export CSV</span>
             </button>
             <button
               type="button"
               data-testid="export-audit-btn"
               onClick={() => void exportAuditBundle()}
-              className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-sky-400 text-xs font-mono rounded border border-slate-700 transition-colors flex items-center gap-1.5"
+              className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-zinc-100 dark:hover:bg-zinc-200 dark:text-zinc-900 text-xs font-mono rounded-lg border border-zinc-900 dark:border-zinc-100 transition-all active:scale-[0.98] flex items-center gap-1.5 shadow-sm font-medium"
             >
+              <svg
+                aria-hidden="true"
+                className="w-3.5 h-3.5 text-emerald-400 dark:text-emerald-600"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={1.75}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"
+                />
+              </svg>
               <span>Export Audit Bundle</span>
             </button>
           </div>
         </div>
 
         {/* AG Grid Enterprise Container */}
-        <div data-testid="clearinghouse-grid" className={`ag-theme-quartz-dark ${className}`}>
+        <div
+          data-testid="clearinghouse-grid"
+          className={`${theme === "light" ? "ag-theme-quartz" : "ag-theme-quartz-dark"} ${className}`}
+        >
           <AgGridReact<ClearinghouseRecord>
             rowData={rowData ?? null}
             columnDefs={columnDefs}
@@ -412,8 +531,13 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
             context={gridContext}
             rowGroupPanelShow="always"
             animateRows={true}
-            rowSelection={{ mode: "singleRow" }}
+            rowSelection={{ mode: "singleRow", checkboxes: false, enableClickSelection: true }}
             onGridReady={onGridReady}
+            onRowClicked={(event) => {
+              if (event.data && onRowClicked) {
+                onRowClicked(event.data);
+              }
+            }}
             asyncTransactionWaitMillis={50}
           />
         </div>

@@ -8,21 +8,22 @@ export {
   computeAuditBundleDigest,
   generateAuditBundle,
 } from "./components/ClearinghouseGrid.js";
-
 export {
   ActionCellRenderer,
   type ActionCellRendererProps,
 } from "./components/renderers/ActionCellRenderer.js";
-
 export {
   RiskCellRenderer,
   type RiskCellRendererProps,
 } from "./components/renderers/RiskCellRenderer.js";
-
 export {
   StatusBadgeRenderer,
   type StatusBadgeRendererProps,
 } from "./components/renderers/StatusBadgeRenderer.js";
+export {
+  TransactionDetailDrawer,
+  type TransactionDetailDrawerProps,
+} from "./components/TransactionDetailDrawer.js";
 
 export { useClearinghouseSocket } from "./hooks/useClearinghouseSocket.js";
 

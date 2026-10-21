@@ -4,12 +4,23 @@ export default {
   darkMode: "class",
   theme: {
     extend: {
+      fontFamily: {
+        sans: [
+          "'DM Sans'",
+          "-apple-system",
+          "BlinkMacSystemFont",
+          "Segoe UI",
+          "Roboto",
+          "sans-serif",
+        ],
+        mono: ["'Geist Mono'", "ui-monospace", "SFMono-Regular", "Menlo", "Monaco", "monospace"],
+      },
       colors: {
         institutional: {
-          bg: "#0B0F17",
-          panel: "#111827",
-          border: "#1F2937",
-          muted: "#9CA3AF",
+          bg: "#09090B",
+          panel: "#121215",
+          border: "#27272A",
+          muted: "#71717A",
         },
       },
     },
