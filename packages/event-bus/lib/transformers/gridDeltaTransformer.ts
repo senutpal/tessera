@@ -246,7 +246,7 @@ export class GridDeltaTransformer {
   constructor(options: GridDeltaTransformerOptions = {}) {
     this.batchWindowMs = options.batchWindowMs ?? 50;
     this.maxBatchSize = options.maxBatchSize ?? 100;
-    this.coalesce = options.coalesce ?? false;
+    this.coalesce = options.coalesce ?? true;
   }
 
   hydrate(records: ClearinghouseRecord[]): void {
@@ -379,8 +379,12 @@ export class GridDeltaTransformer {
       for (const item of items) {
         const txId = item.data.transactionId;
         if (item.type === "add") {
-          addedMap.set(txId, item.data);
-          removedMap.delete(txId);
+          if (removedMap.has(txId)) {
+            removedMap.delete(txId);
+            updatedMap.set(txId, item.data);
+          } else {
+            addedMap.set(txId, item.data);
+          }
         } else if (item.type === "update") {
           if (addedMap.has(txId)) {
             addedMap.set(txId, item.data);
