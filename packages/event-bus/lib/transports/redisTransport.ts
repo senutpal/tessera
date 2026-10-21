@@ -15,6 +15,7 @@ export class RedisTransport implements EventBusTransport {
   private subClient: Redis | undefined = undefined;
   private memoryFallback: MemoryTransport | undefined = undefined;
   private fallbackActive = false;
+  private fallbackPromise: Promise<void> | undefined = undefined;
   private connected = false;
   private channelHandlers = new Map<string, Set<MessageHandler>>();
 
@@ -77,16 +78,23 @@ export class RedisTransport implements EventBusTransport {
         }
       });
 
-      // Connect with timeout guard
-      await Promise.race([
-        Promise.all([this.pubClient.connect(), this.subClient.connect()]),
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(new Error(`Redis connection timed out after ${connectTimeoutMs}ms`)),
-            connectTimeoutMs,
-          ),
-        ),
-      ]);
+      // Connect with timeout guard and proper cleanup
+      let timerId: NodeJS.Timeout | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timerId = setTimeout(
+          () => reject(new Error(`Redis connection timed out after ${connectTimeoutMs}ms`)),
+          connectTimeoutMs,
+        );
+      });
+
+      try {
+        await Promise.race([
+          Promise.all([this.pubClient.connect(), this.subClient.connect()]),
+          timeoutPromise,
+        ]);
+      } finally {
+        if (timerId) clearTimeout(timerId);
+      }
 
       this.subClient.on("message", (channel, message) => {
         const handlers = this.channelHandlers.get(channel);
@@ -104,6 +112,11 @@ export class RedisTransport implements EventBusTransport {
         }
       });
 
+      // Subscribe to any pre-registered channels
+      for (const channel of this.channelHandlers.keys()) {
+        await this.subClient.subscribe(channel);
+      }
+
       this.connected = true;
     } catch (err) {
       if (fallbackToMemory) {
@@ -117,38 +130,56 @@ export class RedisTransport implements EventBusTransport {
   }
 
   private async activateMemoryFallback(_reason: string): Promise<void> {
-    if (this.fallbackActive) return;
+    if (this.fallbackActive) {
+      if (this.fallbackPromise) {
+        await this.fallbackPromise;
+      }
+      return;
+    }
     this.fallbackActive = true;
     this.connected = false;
 
-    // Disconnect any hanging redis sockets cleanly
-    if (this.pubClient) {
-      try {
-        this.pubClient.disconnect(false);
-      } catch {}
-      this.pubClient = undefined;
-    }
-    if (this.subClient) {
-      try {
-        this.subClient.disconnect(false);
-      } catch {}
-      this.subClient = undefined;
-    }
-
-    this.memoryFallback = new MemoryTransport();
-    await this.memoryFallback.connect();
-
-    // Re-register any existing channel handlers in memory transport
-    for (const [channel, handlers] of this.channelHandlers.entries()) {
-      for (const handler of handlers) {
-        await this.memoryFallback.subscribe(channel, handler);
+    this.fallbackPromise = (async () => {
+      // Disconnect any hanging redis sockets cleanly
+      if (this.pubClient) {
+        try {
+          this.pubClient.disconnect(false);
+        } catch {}
+        this.pubClient = undefined;
       }
+      if (this.subClient) {
+        try {
+          this.subClient.disconnect(false);
+        } catch {}
+        this.subClient = undefined;
+      }
+
+      this.memoryFallback = new MemoryTransport();
+      await this.memoryFallback.connect();
+
+      // Re-register any existing channel handlers in memory transport
+      for (const [channel, handlers] of this.channelHandlers.entries()) {
+        for (const handler of handlers) {
+          await this.memoryFallback.subscribe(channel, handler);
+        }
+      }
+    })();
+
+    try {
+      await this.fallbackPromise;
+    } finally {
+      this.fallbackPromise = undefined;
     }
   }
 
   async publish(channel: string, message: string): Promise<void> {
-    if (this.fallbackActive && this.memoryFallback) {
-      return this.memoryFallback.publish(channel, message);
+    if (this.fallbackActive) {
+      if (this.fallbackPromise) {
+        await this.fallbackPromise;
+      }
+      if (this.memoryFallback) {
+        return this.memoryFallback.publish(channel, message);
+      }
     }
 
     if (!this.connected || !this.pubClient) {
@@ -186,11 +217,16 @@ export class RedisTransport implements EventBusTransport {
     }
     handlers.add(handler);
 
-    if (this.fallbackActive && this.memoryFallback) {
-      return this.memoryFallback.subscribe(channel, handler);
-    }
+    let memoryUnsub: (() => Promise<void>) | undefined;
 
-    if (this.connected && this.subClient) {
+    if (this.fallbackActive) {
+      if (this.fallbackPromise) {
+        await this.fallbackPromise;
+      }
+      if (this.memoryFallback) {
+        memoryUnsub = await this.memoryFallback.subscribe(channel, handler);
+      }
+    } else if (this.connected && this.subClient) {
       await this.subClient.subscribe(channel);
     }
 
@@ -207,6 +243,9 @@ export class RedisTransport implements EventBusTransport {
           }
         }
       }
+      if (memoryUnsub) {
+        await memoryUnsub();
+      }
     };
   }
 
@@ -219,22 +258,22 @@ export class RedisTransport implements EventBusTransport {
       this.memoryFallback = undefined;
     }
 
-    if (this.pubClient) {
+    const closeClient = async (client?: Redis) => {
+      if (!client) return;
       try {
-        await this.pubClient.quit();
+        const quitPromise = client.quit();
+        const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 300));
+        await Promise.race([quitPromise, timeoutPromise]);
       } catch {
-        this.pubClient.disconnect(false);
+        client.disconnect(false);
       }
-      this.pubClient = undefined;
-    }
+    };
 
-    if (this.subClient) {
-      try {
-        await this.subClient.quit();
-      } catch {
-        this.subClient.disconnect(false);
-      }
-      this.subClient = undefined;
-    }
+    const pub = this.pubClient;
+    const sub = this.subClient;
+    this.pubClient = undefined;
+    this.subClient = undefined;
+
+    await Promise.all([closeClient(pub), closeClient(sub)]);
   }
 }

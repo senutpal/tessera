@@ -8,6 +8,7 @@ import {
   type EscrowLockedEvent,
   type GridDeltaBatch,
   GridDeltaTransformer,
+  getMicrosecondTimestamp,
   type MandateVerifiedEvent,
   type TrackingUpdatedEvent,
   transformEventToDelta,
@@ -332,5 +333,244 @@ describe("GridDeltaTransformer (Stateful Hydrator & Batcher)", () => {
     detach();
     transformer.close();
     await bus.close();
+  });
+
+  it("supports removeRecord and generates a remove delta in the batch", () => {
+    const transformer = createGridDeltaTransformer({ batchWindowMs: 0 });
+    transformer.hydrate([
+      {
+        transactionId: "tx-to-remove",
+        mandateId: "man-rem",
+        agentId: "agent-rem",
+        merchantDomain: "test.com",
+        amount: 1000,
+        currency: "USD",
+        clearinghouseState: "AUTHORIZED_IN_ESCROW",
+        escrowStatus: "AUTHORIZED_HOLD",
+        riskScore: 10,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+        createdAt: "2026-10-21T00:00:00Z",
+        updatedAt: "2026-10-21T00:00:00Z",
+        sequenceNumber: 1,
+        timestampMicros: 1729500000000000,
+      },
+    ]);
+
+    const batches: GridDeltaBatch[] = [];
+    transformer.onBatch((b) => batches.push(b));
+
+    const removeDelta = transformer.removeRecord("tx-to-remove");
+    expect(removeDelta).not.toBeNull();
+    expect(removeDelta?.type).toBe("remove");
+    expect(removeDelta?.data.transactionId).toBe("tx-to-remove");
+    expect(transformer.getRecord("tx-to-remove")).toBeUndefined();
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0].transaction.remove).toHaveLength(1);
+    expect(batches[0].transaction.remove[0].transactionId).toBe("tx-to-remove");
+    transformer.close();
+  });
+
+  it("coalesces transactions per record in a batch when coalesce option is enabled", async () => {
+    const transformer = new GridDeltaTransformer({
+      batchWindowMs: 20,
+      coalesce: true,
+    });
+
+    const batches: GridDeltaBatch[] = [];
+    transformer.onBatch((b) => batches.push(b));
+
+    // tx-1: add and then update in the same batch
+    transformer.processEvent({
+      eventId: "e1",
+      type: "MandateVerified",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-coalesce-1",
+        mandateId: "m1",
+        agentId: "a1",
+        merchantDomain: "store.com",
+        amount: 5000,
+        currency: "USD",
+        riskScore: 10,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+      },
+    });
+
+    transformer.processEvent({
+      eventId: "e2",
+      type: "EscrowLocked",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-coalesce-1",
+        mandateId: "m1",
+        orderId: "ord-1",
+        authorizationId: "auth-1",
+        amount: 5000,
+        currency: "USD",
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(batches).toHaveLength(1);
+    // In coalesce mode: tx-coalesce-1 should be in add (with the updated escrow hold status), not in both add and update!
+    expect(batches[0].transaction.add).toHaveLength(1);
+    expect(batches[0].transaction.add[0].authorizationId).toBe("auth-1");
+    expect(batches[0].transaction.update).toHaveLength(0);
+
+    transformer.close();
+  });
+
+  it("guarantees strictly monotonic microsecond timestamps under high-frequency calls", () => {
+    const timestamps = new Array<number>(10000);
+    for (let i = 0; i < 10000; i++) {
+      timestamps[i] = getMicrosecondTimestamp();
+    }
+
+    for (let i = 1; i < timestamps.length; i++) {
+      expect(timestamps[i]).toBeGreaterThan(timestamps[i - 1]);
+    }
+  });
+
+  it("transitions SHIPPED to AWAITING_FULFILLMENT and IN_TRANSIT", () => {
+    const mandate: MandateVerifiedEvent = {
+      eventId: "e1",
+      type: "MandateVerified",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-ship-1",
+        mandateId: "m1",
+        agentId: "a1",
+        merchantDomain: "ship.com",
+        amount: 1000,
+        currency: "USD",
+        riskScore: 5,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+      },
+    };
+    const addDelta = transformEventToDelta(mandate, undefined, 1);
+    expect(addDelta).not.toBeNull();
+    if (!addDelta) return;
+
+    const shippedEvent: TrackingUpdatedEvent = {
+      eventId: "e2",
+      type: "TrackingUpdated",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-ship-1",
+        trackingId: "TRACK-SHIP-123",
+        carrier: "UPS",
+        status: "SHIPPED",
+      },
+    };
+
+    const delta = transformEventToDelta(shippedEvent, addDelta.data, 2);
+    expect(delta?.type).toBe("update");
+    expect(delta?.data.clearinghouseState).toBe("AWAITING_FULFILLMENT");
+    expect(delta?.data.escrowStatus).toBe("IN_TRANSIT");
+    expect(delta?.data.trackingId).toBe("TRACK-SHIP-123");
+  });
+
+  it("transitions CANCELLED to VOIDED and SLA_BREACH_VOIDED", () => {
+    const mandate: MandateVerifiedEvent = {
+      eventId: "e1",
+      type: "MandateVerified",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-cancel-1",
+        mandateId: "m1",
+        agentId: "a1",
+        merchantDomain: "ship.com",
+        amount: 1000,
+        currency: "USD",
+        riskScore: 5,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+      },
+    };
+    const addDelta = transformEventToDelta(mandate, undefined, 1);
+    if (!addDelta) return;
+
+    const cancelEvent: TrackingUpdatedEvent = {
+      eventId: "e2",
+      type: "TrackingUpdated",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-cancel-1",
+        trackingId: "TRACK-CANCEL-123",
+        carrier: "UPS",
+        status: "CANCELLED",
+      },
+    };
+
+    const delta = transformEventToDelta(cancelEvent, addDelta.data, 2);
+    expect(delta?.type).toBe("update");
+    expect(delta?.data.clearinghouseState).toBe("VOIDED");
+    expect(delta?.data.escrowStatus).toBe("SLA_BREACH_VOIDED");
+  });
+
+  it("transitions BUYER_FAVOR dispute outcome to REFUNDED state", () => {
+    const mandate: MandateVerifiedEvent = {
+      eventId: "e1",
+      type: "MandateVerified",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-disp-1",
+        mandateId: "m1",
+        agentId: "a1",
+        merchantDomain: "disp.com",
+        amount: 5000,
+        currency: "USD",
+        riskScore: 10,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+      },
+    };
+    const addDelta = transformEventToDelta(mandate, undefined, 1);
+    if (!addDelta) return;
+
+    const disputeResolved: DisputeResolvedEvent = {
+      eventId: "e2",
+      type: "DisputeResolved",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-disp-1",
+        disputeId: "DISP-999",
+        outcome: "BUYER_FAVOR",
+        refundAmount: 5000,
+      },
+    };
+
+    const delta = transformEventToDelta(disputeResolved, addDelta.data, 2);
+    expect(delta?.type).toBe("update");
+    expect(delta?.data.clearinghouseState).toBe("REFUNDED");
+    expect(delta?.data.escrowStatus).toBe("REFUNDED");
+    expect(delta?.data.disputeOutcome).toBe("BUYER_FAVOR");
+  });
+
+  it("creates valid record on DisputeOpened when currentState is unhydrated without dropping", () => {
+    const disputeOpen: DisputeOpenedEvent = {
+      eventId: "e-unhydrated",
+      type: "DisputeOpened",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-unhydrated-1",
+        disputeId: "DISP-UNHYDRATED",
+        reason: "ITEM_DAMAGED",
+        amount: 4500,
+        currency: "USD",
+      },
+    };
+
+    const delta = transformEventToDelta(disputeOpen, undefined, 1);
+    expect(delta).not.toBeNull();
+    expect(delta?.type).toBe("add");
+    expect(delta?.data.transactionId).toBe("tx-unhydrated-1");
+    expect(delta?.data.disputeId).toBe("DISP-UNHYDRATED");
+    expect(delta?.data.clearinghouseState).toBe("DISPUTED");
   });
 });

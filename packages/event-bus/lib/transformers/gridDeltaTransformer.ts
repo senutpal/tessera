@@ -91,27 +91,48 @@ export function transformEventToDelta(
     }
 
     case "TrackingUpdated": {
-      if (!currentState) {
-        return null;
-      }
+      const base: ClearinghouseRecord = currentState ?? {
+        transactionId: event.data.transactionId,
+        mandateId: "unknown",
+        agentId: "unknown",
+        merchantDomain: "unknown",
+        amount: 0,
+        currency: "USD",
+        clearinghouseState: "AWAITING_FULFILLMENT",
+        escrowStatus: "IN_TRANSIT",
+        riskScore: 0,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        sequenceNumber,
+        timestampMicros,
+      };
 
-      let state = currentState.clearinghouseState;
-      let escrow = currentState.escrowStatus;
+      let state = base.clearinghouseState;
+      let escrow = base.escrowStatus;
 
       if (event.data.status === "DELIVERED") {
         state = "FULFILLED_DELIVERED";
         escrow = "DELIVERED_CAPTURED";
-      } else if (event.data.status === "IN_TRANSIT") {
+      } else if (event.data.status === "IN_TRANSIT" || event.data.status === "SHIPPED") {
         state = "AWAITING_FULFILLMENT";
         escrow = "IN_TRANSIT";
       } else if (event.data.status === "CANCELLED" || event.data.status === "RETURNED") {
+        state = "VOIDED";
         escrow = "SLA_BREACH_VOIDED";
       }
 
+      const captureId =
+        (typeof event.data.metadata?.captureId === "string"
+          ? event.data.metadata.captureId
+          : undefined) ?? base.captureId;
+
       const updated: ClearinghouseRecord = {
-        ...currentState,
+        ...base,
         trackingId: event.data.trackingId,
         carrier: event.data.carrier,
+        captureId,
         clearinghouseState: state,
         escrowStatus: escrow,
         updatedAt: nowIso,
@@ -120,18 +141,32 @@ export function transformEventToDelta(
       };
 
       return {
-        type: "update",
+        type: currentState ? "update" : "add",
         data: updated,
       };
     }
 
     case "DisputeOpened": {
-      if (!currentState) {
-        return null;
-      }
+      const base: ClearinghouseRecord = currentState ?? {
+        transactionId: event.data.transactionId,
+        mandateId: "unknown",
+        agentId: "unknown",
+        merchantDomain: "unknown",
+        amount: event.data.amount,
+        currency: event.data.currency,
+        clearinghouseState: "DISPUTED",
+        escrowStatus: "DISPUTED",
+        riskScore: 0,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        sequenceNumber,
+        timestampMicros,
+      };
 
       const updated: ClearinghouseRecord = {
-        ...currentState,
+        ...base,
         disputeId: event.data.disputeId,
         disputeReason: event.data.reason,
         clearinghouseState: "DISPUTED",
@@ -142,21 +177,37 @@ export function transformEventToDelta(
       };
 
       return {
-        type: "update",
+        type: currentState ? "update" : "add",
         data: updated,
       };
     }
 
     case "DisputeResolved": {
-      if (!currentState) {
-        return null;
-      }
-
       const isRefunded =
-        event.data.outcome === "REFUNDED" || event.data.outcome === "CLAIM_ACCEPTED";
+        event.data.outcome === "REFUNDED" ||
+        event.data.outcome === "CLAIM_ACCEPTED" ||
+        event.data.outcome === "BUYER_FAVOR";
+
+      const base: ClearinghouseRecord = currentState ?? {
+        transactionId: event.data.transactionId,
+        mandateId: "unknown",
+        agentId: "unknown",
+        merchantDomain: "unknown",
+        amount: event.data.refundAmount ?? 0,
+        currency: "USD",
+        clearinghouseState: isRefunded ? "REFUNDED" : "SETTLED",
+        escrowStatus: isRefunded ? "REFUNDED" : "SETTLED",
+        riskScore: 0,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        sequenceNumber,
+        timestampMicros,
+      };
 
       const updated: ClearinghouseRecord = {
-        ...currentState,
+        ...base,
         disputeOutcome: event.data.outcome,
         clearinghouseState: isRefunded ? "REFUNDED" : "SETTLED",
         escrowStatus: isRefunded ? "REFUNDED" : "SETTLED",
@@ -166,7 +217,7 @@ export function transformEventToDelta(
       };
 
       return {
-        type: "update",
+        type: currentState ? "update" : "add",
         data: updated,
       };
     }
@@ -179,6 +230,7 @@ export function transformEventToDelta(
 export interface GridDeltaTransformerOptions {
   batchWindowMs?: number;
   maxBatchSize?: number;
+  coalesce?: boolean;
 }
 
 export class GridDeltaTransformer {
@@ -186,6 +238,7 @@ export class GridDeltaTransformer {
   private buffer: GridDeltaItem[] = [];
   private batchWindowMs: number;
   private maxBatchSize: number;
+  private coalesce: boolean;
   private flushTimer: NodeJS.Timeout | undefined = undefined;
   private sequenceCounter = 0;
   private batchListeners = new Set<(batch: GridDeltaBatch) => void>();
@@ -193,6 +246,7 @@ export class GridDeltaTransformer {
   constructor(options: GridDeltaTransformerOptions = {}) {
     this.batchWindowMs = options.batchWindowMs ?? 50;
     this.maxBatchSize = options.maxBatchSize ?? 100;
+    this.coalesce = options.coalesce ?? false;
   }
 
   hydrate(records: ClearinghouseRecord[]): void {
@@ -232,7 +286,12 @@ export class GridDeltaTransformer {
   }
 
   processEvent(event: DomainEvent): GridDeltaItem | null {
-    this.sequenceCounter += 1;
+    this.sequenceCounter = Math.max(
+      this.sequenceCounter + 1,
+      typeof event.sequenceNumber === "number" && event.sequenceNumber > 0
+        ? event.sequenceNumber
+        : this.sequenceCounter + 1,
+    );
     const currentState = this.records.get(event.data.transactionId);
     const delta = transformEventToDelta(event, currentState, this.sequenceCounter);
 
@@ -263,6 +322,39 @@ export class GridDeltaTransformer {
     return delta;
   }
 
+  removeRecord(transactionId: string): GridDeltaItem | null {
+    const existing = this.records.get(transactionId);
+    if (!existing) {
+      return null;
+    }
+
+    this.sequenceCounter += 1;
+    this.records.delete(transactionId);
+
+    const delta: GridDeltaItem = {
+      type: "remove",
+      data: {
+        ...existing,
+        sequenceNumber: this.sequenceCounter,
+        timestampMicros: getMicrosecondTimestamp(),
+        updatedAt: new Date().toISOString(),
+      },
+    };
+
+    this.buffer.push(delta);
+
+    if (this.batchWindowMs <= 0 || this.buffer.length >= this.maxBatchSize) {
+      this.flush();
+    } else if (!this.flushTimer) {
+      this.flushTimer = setTimeout(() => {
+        this.flushTimer = undefined;
+        this.flush();
+      }, this.batchWindowMs);
+    }
+
+    return delta;
+  }
+
   flush(): void {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
@@ -276,19 +368,55 @@ export class GridDeltaTransformer {
     const items = [...this.buffer];
     this.buffer = [];
 
-    const transaction: GridTransaction = {
-      add: [],
-      update: [],
-      remove: [],
-    };
+    let transaction: GridTransaction;
 
-    for (const item of items) {
-      if (item.type === "add") {
-        transaction.add.push(item.data);
-      } else if (item.type === "update") {
-        transaction.update.push(item.data);
-      } else if (item.type === "remove") {
-        transaction.remove.push(item.data);
+    if (this.coalesce) {
+      // Coalesce changes per transactionId for AG Grid Enterprise applyTransactionAsync
+      const addedMap = new Map<string, ClearinghouseRecord>();
+      const updatedMap = new Map<string, ClearinghouseRecord>();
+      const removedMap = new Map<string, ClearinghouseRecord>();
+
+      for (const item of items) {
+        const txId = item.data.transactionId;
+        if (item.type === "add") {
+          addedMap.set(txId, item.data);
+          removedMap.delete(txId);
+        } else if (item.type === "update") {
+          if (addedMap.has(txId)) {
+            addedMap.set(txId, item.data);
+          } else {
+            updatedMap.set(txId, item.data);
+          }
+        } else if (item.type === "remove") {
+          if (addedMap.has(txId)) {
+            addedMap.delete(txId);
+          } else {
+            updatedMap.delete(txId);
+            removedMap.set(txId, item.data);
+          }
+        }
+      }
+
+      transaction = {
+        add: Array.from(addedMap.values()),
+        update: Array.from(updatedMap.values()),
+        remove: Array.from(removedMap.values()),
+      };
+    } else {
+      transaction = {
+        add: [],
+        update: [],
+        remove: [],
+      };
+
+      for (const item of items) {
+        if (item.type === "add") {
+          transaction.add.push(item.data);
+        } else if (item.type === "update") {
+          transaction.update.push(item.data);
+        } else if (item.type === "remove") {
+          transaction.remove.push(item.data);
+        }
       }
     }
 
