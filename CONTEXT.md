@@ -51,6 +51,10 @@ A coalesced transaction packet emitted by `GridDeltaTransformer` (`packages/even
 
 The pub/sub event backbone coordinating domain events (`MandateVerified`, `EscrowLocked`, `TrackingUpdated`, `DisputeOpened`, `DisputeResolved`). Implements distributed multi-instance broadcasting via Redis Pub/Sub with automatic, seamless fallback to in-memory `EventEmitter` dispatching for local testing and broker resilience.
 
+### AG Grid Enterprise Clearinghouse Dashboard UI
+
+The institutional supervisory frontend (`apps/clearinghouse-ui`) consuming real-time streaming deltas from the WebSocket streaming ledger engine via `applyTransactionAsync`. Visualizes dynamic risk heatmaps (0-30 green, 31-70 amber, 71-100 red), live status badges, multi-column filtering, and provides 1-click Human-in-the-Loop (HITL) supervisor action buttons (`/counter-sign` approve, `/void` escrow void, and `/dispute` escalation) with decoupled delta buffering.
+
 
 ---
 

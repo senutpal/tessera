@@ -1,0 +1,40 @@
+@import "ag-grid-community/styles/ag-grid.css";
+@import "ag-grid-community/styles/ag-theme-quartz.css";
+
+/* biome-ignore lint/suspicious/noUnknownAtRules: tailwind directive */
+@tailwind base;
+/* biome-ignore lint/suspicious/noUnknownAtRules: tailwind directive */
+@tailwind components;
+/* biome-ignore lint/suspicious/noUnknownAtRules: tailwind directive */
+@tailwind utilities;
+
+/* Institutional Dark Theme Variables */
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #0b0f17;
+  color: #f1f5f9;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  overflow-x: hidden;
+}
+
+/* AG Grid Dark Theme Quartz overrides */
+.ag-theme-quartz-dark {
+  --ag-background-color: #0d131f;
+  --ag-header-background-color: #090d15;
+  --ag-odd-row-background-color: #0d131f;
+  --ag-row-hover-color: #1a2233;
+  --ag-border-color: #1e293b;
+  --ag-header-column-separator-color: #1e293b;
+  --ag-font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+    monospace;
+  --ag-font-size: 12px;
+  --ag-grid-size: 6px;
+  --ag-row-height: 40px;
+}
