@@ -1,0 +1,233 @@
+@import "ag-grid-community/styles/ag-grid.css";
+@import "ag-grid-community/styles/ag-theme-quartz.css";
+
+/* biome-ignore lint/suspicious/noUnknownAtRules: tailwind directive */
+@tailwind base;
+/* biome-ignore lint/suspicious/noUnknownAtRules: tailwind directive */
+@tailwind components;
+/* biome-ignore lint/suspicious/noUnknownAtRules: tailwind directive */
+@tailwind utilities;
+
+/* Institutional Minimalist Theme Variables */
+:root {
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #fafafa;
+  color: #18181b;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.dark body {
+  background-color: #09090b;
+  color: #f4f4f5;
+}
+
+/* Minimalist Hardware-Accelerated Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1aa;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #27272a;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* AG Grid Light Theme Quartz: High-Density Minimalist Financial Terminal */
+.ag-theme-quartz {
+  --ag-background-color: #ffffff;
+  --ag-header-background-color: #fafafa;
+  --ag-odd-row-background-color: #ffffff;
+  --ag-row-hover-color: #f4f4f5;
+  --ag-selected-row-background-color: #f1f5f9;
+  --ag-border-color: #e4e4e7;
+  --ag-header-column-separator-color: #e4e4e7;
+  --ag-row-border-color: #f4f4f5;
+  --ag-font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --ag-font-size: 12px;
+  --ag-grid-size: 5px;
+  --ag-row-height: 44px;
+  --ag-header-height: 38px;
+  --ag-cell-horizontal-padding: 14px;
+  --ag-border-radius: 0px;
+  --ag-header-foreground-color: #71717a;
+  --ag-foreground-color: #18181b;
+  --ag-secondary-foreground-color: #a1a1aa;
+  --ag-input-focus-border-color: #71717a;
+  --ag-card-background: #ffffff;
+  --ag-popup-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+/* Shared Quartz Core Styling */
+.ag-theme-quartz .ag-header-cell-label,
+.ag-theme-quartz-dark .ag-header-cell-label {
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+
+.ag-theme-quartz .ag-header-cell-text,
+.ag-theme-quartz-dark .ag-header-cell-text {
+  white-space: nowrap;
+}
+
+.ag-theme-quartz .ag-cell,
+.ag-theme-quartz-dark .ag-cell {
+  display: flex;
+  align-items: center;
+  line-height: normal;
+}
+
+.ag-theme-quartz .ag-cell.text-right,
+.ag-theme-quartz-dark .ag-cell.text-right {
+  justify-content: flex-end;
+}
+
+.ag-theme-quartz .ag-cell.text-center,
+.ag-theme-quartz-dark .ag-cell.text-center {
+  justify-content: center;
+}
+
+.ag-theme-quartz .ag-right-aligned-header .ag-header-cell-label,
+.ag-theme-quartz-dark .ag-right-aligned-header .ag-header-cell-label {
+  flex-direction: row-reverse;
+}
+
+.ag-theme-quartz .ag-row,
+.ag-theme-quartz-dark .ag-row {
+  transition: background-color 150ms ease-out;
+  cursor: pointer;
+}
+
+/* Light Theme Details */
+.ag-theme-quartz .ag-header-row {
+  border-bottom: 1px solid #e4e4e7;
+}
+
+.ag-theme-quartz .ag-row-selected {
+  border-left: 3px solid #059669;
+}
+
+.ag-theme-quartz .ag-pinned-left-header,
+.ag-theme-quartz .ag-pinned-left-cols-container {
+  border-right: 1px solid #e4e4e7;
+}
+
+.ag-theme-quartz .ag-pinned-right-header,
+.ag-theme-quartz .ag-pinned-right-cols-container {
+  border-left: 1px solid #e4e4e7;
+}
+
+.ag-theme-quartz .ag-column-drop-wrapper {
+  background-color: #fafafa;
+  color: #71717a;
+  border-bottom: 1px solid #e4e4e7;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 11px;
+}
+
+.ag-theme-quartz .ag-floating-filter-input input {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  background-color: #f4f4f5;
+  border-color: #e4e4e7;
+  color: #18181b;
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
+.ag-theme-quartz .ag-floating-filter-input input:focus {
+  border-color: #71717a;
+  outline: none;
+}
+
+/* AG Grid Dark Theme Quartz overrides: High-Density Minimalist Financial Terminal */
+.ag-theme-quartz-dark {
+  --ag-background-color: #09090b;
+  --ag-header-background-color: #0e0e11;
+  --ag-odd-row-background-color: #09090b;
+  --ag-row-hover-color: #131317;
+  --ag-selected-row-background-color: rgba(255, 255, 255, 0.04);
+  --ag-border-color: #27272a;
+  --ag-header-column-separator-color: #27272a;
+  --ag-row-border-color: #18181b;
+  --ag-font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --ag-font-size: 12px;
+  --ag-grid-size: 5px;
+  --ag-row-height: 44px;
+  --ag-header-height: 38px;
+  --ag-cell-horizontal-padding: 14px;
+  --ag-border-radius: 0px;
+  --ag-header-foreground-color: #a1a1aa;
+  --ag-foreground-color: #f4f4f5;
+  --ag-secondary-foreground-color: #71717a;
+  --ag-input-focus-border-color: rgba(255, 255, 255, 0.25);
+  --ag-card-background: #0f0f13;
+  --ag-popup-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+
+.ag-theme-quartz-dark .ag-header-row {
+  border-bottom: 1px solid #27272a;
+}
+
+.ag-theme-quartz-dark .ag-row-selected {
+  border-left: 3px solid #10b981;
+}
+
+.ag-theme-quartz-dark .ag-pinned-left-header,
+.ag-theme-quartz-dark .ag-pinned-left-cols-container {
+  border-right: 1px solid #27272a;
+}
+
+.ag-theme-quartz-dark .ag-pinned-right-header,
+.ag-theme-quartz-dark .ag-pinned-right-cols-container {
+  border-left: 1px solid #27272a;
+}
+
+.ag-theme-quartz-dark .ag-column-drop-wrapper {
+  background-color: #0c0c0e;
+  color: #a1a1aa;
+  border-bottom: 1px solid #27272a;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 11px;
+}
+
+.ag-theme-quartz-dark .ag-floating-filter-input input {
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  background-color: #0c0c0e;
+  border-color: #27272a;
+  color: #e4e4e7;
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
+.ag-theme-quartz-dark .ag-floating-filter-input input:focus {
+  border-color: rgba(255, 255, 255, 0.3);
+  outline: none;
+}
