@@ -271,6 +271,7 @@ export class GridDeltaTransformer {
     timestampMicros: number;
     records: ClearinghouseRecord[];
   } {
+    this.flush();
     return {
       sequenceNumber: this.sequenceCounter,
       timestampMicros: getMicrosecondTimestamp(),

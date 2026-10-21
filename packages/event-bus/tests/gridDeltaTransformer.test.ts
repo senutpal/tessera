@@ -691,4 +691,39 @@ describe("GridDeltaTransformer (Stateful Hydrator & Batcher)", () => {
     expect(delta?.data.disputeId).toBe("DISP-UNHYDRATED");
     expect(delta?.data.clearinghouseState).toBe("DISPUTED");
   });
+
+  it("flushes pending buffered deltas when getSnapshotBatch() is called", () => {
+    const transformer = createGridDeltaTransformer({ batchWindowMs: 500 });
+    const batches: GridDeltaBatch[] = [];
+    transformer.onBatch((b) => batches.push(b));
+
+    transformer.processEvent({
+      eventId: "e-snap-1",
+      type: "MandateVerified",
+      timestamp: new Date().toISOString(),
+      data: {
+        transactionId: "tx-snap-1",
+        mandateId: "m1",
+        agentId: "a1",
+        merchantDomain: "test.com",
+        amount: 2500,
+        currency: "USD",
+        riskScore: 10,
+        riskTier: "LOW",
+        hitlStatus: "NOT_REQUIRED",
+      },
+    });
+
+    // Before snapshot batch, batch has not flushed yet due to 500ms window
+    expect(batches).toHaveLength(0);
+
+    // Call getSnapshotBatch(): must trigger flush
+    const snap = transformer.getSnapshotBatch();
+    expect(snap.records).toHaveLength(1);
+    expect(snap.records[0].transactionId).toBe("tx-snap-1");
+    expect(batches).toHaveLength(1);
+    expect(batches[0].deltas[0].data.transactionId).toBe("tx-snap-1");
+
+    transformer.close();
+  });
 });
