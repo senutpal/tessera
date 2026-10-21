@@ -77,6 +77,18 @@ describe("EvidencePackager & computeEvidenceHash", () => {
       expect(note.length).toBeLessThanOrEqual(2000);
     });
 
+    it("formats AP2Amount correctly in quote metadata without [object Object]", () => {
+      const note = buildDisputeEvidenceAuditNote({
+        disputeId: "PP-D-99887",
+        quote: {
+          quoteId: "QUOTE-AP2-1",
+          total: { amount: 14999, currency: "USD" },
+        },
+      });
+      expect(note).toContain("Quote Total: 149.99 USD");
+      expect(note).not.toContain("[object Object]");
+    });
+
     it("truncates excessively long notes to within 2000 characters with ellipsis", () => {
       const veryLongNotes = "X".repeat(3000);
       const note = buildDisputeEvidenceAuditNote({
@@ -124,7 +136,7 @@ describe("EvidencePackager & computeEvidenceHash", () => {
   });
 
   describe("EvidencePackager.packageAndSubmitEvidence", () => {
-    it("submits direct JSON evidence payload without attached files", async () => {
+    it("submits multipart/form-data evidence payload with input JSON part", async () => {
       const fetchSpy = vi.fn();
       globalThis.fetch = fetchSpy;
 
@@ -147,6 +159,7 @@ describe("EvidencePackager & computeEvidenceHash", () => {
 
       const result = await packager.packageAndSubmitEvidence({
         disputeId: "PP-D-99887",
+        transactionId: "TX-ORIGINAL-77",
         evidenceType: "PROOF_OF_FULFILLMENT",
         tracking: {
           carrierName: "FEDEX",
@@ -173,27 +186,35 @@ describe("EvidencePackager & computeEvidenceHash", () => {
         "https://api-m.sandbox.paypal.com/v1/customer/disputes/PP-D-99887/provide-evidence",
       );
       expect(calledOptions.method).toBe("POST");
-      const headers = new Headers(calledOptions.headers);
-      expect(headers.get("Content-Type")).toBe("application/json");
+      expect(calledOptions.body).toBeInstanceOf(FormData);
+      const formData = calledOptions.body as FormData;
+      expect(formData.has("input")).toBe(true);
 
-      const requestBody = JSON.parse(calledOptions.body as string);
-      expect(requestBody.evidence_type).toBe("PROOF_OF_FULFILLMENT");
-      expect(requestBody.evidence_info.tracking_info).toEqual([
+      const inputPart = formData.get("input") as Blob;
+      const inputContent = await inputPart.text();
+      const requestPayload = JSON.parse(inputContent);
+      expect(requestPayload.evidences).toBeDefined();
+      expect(requestPayload.evidences).toHaveLength(1);
+
+      const evidenceItem = requestPayload.evidences[0];
+      expect(evidenceItem.evidence_type).toBe("PROOF_OF_FULFILLMENT");
+      expect(evidenceItem.evidence_info.tracking_info).toEqual([
         {
           carrier_name: "FEDEX",
           tracking_number: "794628392019",
         },
       ]);
-      expect(requestBody.notes).toContain("Carrier=FEDEX");
-      expect(requestBody.notes).toContain("Track#=794628392019");
+      expect(evidenceItem.notes).toContain("Carrier=FEDEX");
+      expect(evidenceItem.notes).toContain("Track#=794628392019");
 
-      // Verify domain event emitted
+      // Verify domain event emitted with actual transactionId
       expect(capturedEvents).toHaveLength(1);
       const ev = capturedEvents[0];
       expect(ev).toBeDefined();
       if (!ev) throw new Error("Expected event");
       expect(ev.type).toBe("dispute.evidence_submitted");
       expect(ev.disputeId).toBe("PP-D-99887");
+      expect(ev.transactionId).toBe("TX-ORIGINAL-77");
       expect(ev.carrierName).toBe("FEDEX");
       expect(ev.trackingNumber).toBe("794628392019");
       expect(ev.mandateId).toBe("MANDATE-ABC-99");
