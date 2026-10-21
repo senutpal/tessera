@@ -137,6 +137,12 @@ export class ClearinghouseSocketServer extends EventEmitter {
   }
 
   private async handleConnection(socket: WebSocket, req: IncomingMessage): Promise<void> {
+    const earlyMessages: unknown[] = [];
+    const earlyMsgHandler = (raw: unknown) => {
+      earlyMessages.push(raw);
+    };
+    socket.on("message", earlyMsgHandler);
+
     const url = new URL(req.url ?? "", "http://localhost");
     const token =
       url.searchParams.get("token") || req.headers.authorization?.replace(/^Bearer\s+/i, "");
@@ -145,19 +151,26 @@ export class ClearinghouseSocketServer extends EventEmitter {
     let userId: string | undefined;
 
     if (this.options.authenticate) {
-      const authResult = await this.options.authenticate(req, token ?? undefined);
-      if (typeof authResult === "boolean") {
-        authenticated = authResult;
-      } else {
-        authenticated = authResult.authenticated;
-        userId = authResult.userId;
+      try {
+        const authResult = await this.options.authenticate(req, token ?? undefined);
+        if (typeof authResult === "boolean") {
+          authenticated = authResult;
+        } else {
+          authenticated = authResult.authenticated;
+          userId = authResult.userId;
+        }
+      } catch {
+        authenticated = false;
       }
 
       if (!authenticated) {
+        socket.off("message", earlyMsgHandler);
         socket.close(4001, "Unauthorized");
         return;
       }
     }
+
+    socket.off("message", earlyMsgHandler);
 
     const sessionId = `sess-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     const session: ClientSession = {
@@ -172,6 +185,9 @@ export class ClearinghouseSocketServer extends EventEmitter {
       authenticated,
       userId,
     };
+
+    // Immediately hydrate client with state snapshot before subscribing to broadcast channel
+    this.sendSnapshot(session);
 
     this.sessionManager.addSession(session);
     this.emit("client_connected", session);
@@ -214,8 +230,13 @@ export class ClearinghouseSocketServer extends EventEmitter {
       socket.terminate();
     });
 
-    // Immediately hydrate client with state snapshot
-    this.sendSnapshot(session);
+    // Replay any early messages received during authentication
+    for (const raw of earlyMessages) {
+      try {
+        const parsed = JSON.parse(String(raw));
+        this.handleClientMessage(session, parsed);
+      } catch {}
+    }
   }
 
   private handleClientMessage(session: ClientSession, msg: unknown): void {
@@ -397,7 +418,11 @@ export class ClearinghouseSocketServer extends EventEmitter {
       if (session.socket.readyState === WebSocket.OPEN) {
         if (session.socket.bufferedAmount > highWaterMark) {
           this.emit("backpressure", session);
-          continue; // Backpressure protection: skip frame for slow consumer
+          this.sessionManager.removeSession(session.id);
+          try {
+            session.socket.terminate();
+          } catch {}
+          continue;
         }
         this.sendToSocket(session.socket, message);
       }

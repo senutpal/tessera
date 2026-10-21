@@ -501,4 +501,74 @@ describe("ClearinghouseSocketServer", () => {
     expect([1006, 1009]).toContain(closeInfo.code);
     expect(server.clientCount).toBe(0);
   });
+
+  it("queues and processes control messages sent immediately during async authentication", async () => {
+    server = createClearinghouseSocketServer({
+      port: 0,
+      host: "127.0.0.1",
+      authenticate: async (_req, token) => {
+        // Introduce small async delay
+        await new Promise((r) => setTimeout(r, 60));
+        return token === "valid-token";
+      },
+    });
+    await server.start();
+    port = server.port;
+
+    // Connect raw websocket and send message immediately on open without waiting
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/clearinghouse?token=valid-token`);
+    activeClients.push(ws);
+
+    const received: TestMessage[] = [];
+    ws.on("message", (data) => {
+      try {
+        received.push(JSON.parse(data.toString()));
+      } catch {}
+    });
+
+    await new Promise<void>((resolve) => {
+      ws.on("open", () => {
+        // Send subscribe with ack immediately upon TCP open
+        ws.send(JSON.stringify({ type: "subscribe", channel: "custom-chan", ack: true }));
+        resolve();
+      });
+    });
+
+    // Wait for auth to complete and message to be replayed
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Must have received the snapshot first, followed by subscribed ack
+    expect(received.some((m) => m.type === "snapshot")).toBe(true);
+    expect(received.some((m) => m.type === "subscribed" && m.channel === "custom-chan")).toBe(true);
+  });
+
+  it("terminates client socket and removes session on backpressure without crashing", async () => {
+    server = createClearinghouseSocketServer({
+      port: 0,
+      host: "127.0.0.1",
+      highWaterMark: 100,
+    });
+    await server.start();
+    port = server.port;
+
+    const client = await createClient();
+    await client.nextMessage();
+    expect(server.clientCount).toBe(1);
+
+    const session = Array.from(server.getSessions().values())[0];
+    Object.defineProperty(session.socket, "bufferedAmount", {
+      value: 1024 * 1024,
+      configurable: true,
+    });
+
+    let backpressureEmitted = false;
+    server.on("backpressure", () => {
+      backpressureEmitted = true;
+    });
+
+    server.broadcast("ledger", { type: "test", data: "large" });
+
+    expect(backpressureEmitted).toBe(true);
+    expect(server.clientCount).toBe(0);
+  });
 });
