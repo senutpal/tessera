@@ -1,6 +1,7 @@
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ClearinghouseGrid, type ClearinghouseGridHandle } from "./components/ClearinghouseGrid.js";
+import { INITIAL_DEMO_RECORDS } from "./demoData.js";
 import { useClearinghouseSocket } from "./hooks/useClearinghouseSocket.js";
 import type { ClearinghouseRecord, GridTransaction } from "./types.js";
 
@@ -8,6 +9,9 @@ export const App: React.FC = () => {
   const gridRef = useRef<ClearinghouseGridHandle | null>(null);
   const recordsRef = useRef<Map<string, ClearinghouseRecord>>(new Map());
   const statsRafRef = useRef<number | null>(null);
+  const [simulationActive, setSimulationActive] = useState<boolean>(false);
+  const simTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [seqNumber, setSeqNumber] = useState<number>(112);
 
   const [stats, setStats] = useState({
     pendingHitl: 0,
@@ -77,6 +81,16 @@ export const App: React.FC = () => {
     [recalculateStats],
   );
 
+  // Initialize with rich demo dataset on mount if no active snapshot
+  useEffect(() => {
+    if (recordsRef.current.size === 0) {
+      for (const item of INITIAL_DEMO_RECORDS) {
+        recordsRef.current.set(item.transactionId, item);
+      }
+      recalculateStats();
+    }
+  }, [recalculateStats]);
+
   const defaultWsUrl =
     typeof window !== "undefined" && window.location.host
       ? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/clearinghouse`
@@ -100,18 +114,133 @@ export const App: React.FC = () => {
   const { connectionStatus, isConnected, lastSequenceNumber, snapshot, connect, disconnect } =
     useClearinghouseSocket({
       url: wsUrl,
-      autoConnect: true,
+      autoConnect: false, // Don't block UI with continuous reconnect loops when standalone
       onSnapshot: handleSnapshot,
       onTransaction: handleTransaction,
     });
+
+  // Supervisor Action Handlers with optimistic UI updates
+  const handleApprove = useCallback(
+    async (record: ClearinghouseRecord) => {
+      const updated: ClearinghouseRecord = {
+        ...record,
+        hitlStatus: "APPROVED",
+        clearinghouseState: "AUTHORIZED_IN_ESCROW",
+        updatedAt: new Date().toISOString(),
+      };
+      handleTransaction({ add: [], update: [updated], remove: [] });
+    },
+    [handleTransaction],
+  );
+
+  const handleVoid = useCallback(
+    async (record: ClearinghouseRecord) => {
+      const updated: ClearinghouseRecord = {
+        ...record,
+        clearinghouseState: "VOIDED",
+        escrowStatus: "SLA_BREACH_VOIDED",
+        hitlStatus: "REJECTED",
+        updatedAt: new Date().toISOString(),
+      };
+      handleTransaction({ add: [], update: [updated], remove: [] });
+    },
+    [handleTransaction],
+  );
+
+  const handleDispute = useCallback(
+    async (record: ClearinghouseRecord) => {
+      const updated: ClearinghouseRecord = {
+        ...record,
+        clearinghouseState: "DISPUTED",
+        escrowStatus: "DISPUTED",
+        updatedAt: new Date().toISOString(),
+      };
+      handleTransaction({ add: [], update: [updated], remove: [] });
+    },
+    [handleTransaction],
+  );
+
+  // Live streaming delta simulator
+  useEffect(() => {
+    if (!simulationActive) {
+      if (simTimerRef.current) clearInterval(simTimerRef.current);
+      return;
+    }
+
+    simTimerRef.current = setInterval(() => {
+      setSeqNumber((prevSeq) => {
+        const nextSeq = prevSeq + 1;
+        const currentRecords = Array.from(recordsRef.current.values());
+        if (currentRecords.length === 0) return nextSeq;
+
+        // Pick a random record to modify or append
+        const target = currentRecords[Math.floor(Math.random() * currentRecords.length)];
+        const deltaType = Math.random();
+
+        if (deltaType < 0.6) {
+          // Update existing risk score / amount slightly
+          const scoreDelta = Math.floor(Math.random() * 15) - 7;
+          const newScore = Math.max(1, Math.min(99, target.riskScore + scoreDelta));
+          const updated: ClearinghouseRecord = {
+            ...target,
+            riskScore: newScore,
+            riskTier: newScore <= 30 ? "LOW" : newScore <= 70 ? "ELEVATED" : "CRITICAL_HITL",
+            sequenceNumber: nextSeq,
+            updatedAt: new Date().toISOString(),
+          };
+          handleTransaction({ add: [], update: [updated], remove: [] });
+        } else {
+          // Add a new high-frequency transaction
+          const merchants = [
+            "stripe.com",
+            "openai.com",
+            "aws.amazon.com",
+            "anthropic.com",
+            "google.com",
+          ];
+          const merchant = merchants[Math.floor(Math.random() * merchants.length)];
+          const randomAmount = Math.floor(Math.random() * 50000) * 100 + 10000;
+          const randomScore = Math.floor(Math.random() * 95) + 5;
+          const newTx: ClearinghouseRecord = {
+            transactionId: `tx-stream-${nextSeq}`,
+            mandateId: `man-sim-${nextSeq}`,
+            agentId: `agent-live-${(nextSeq % 5) + 1}`,
+            merchantDomain: merchant,
+            amount: randomAmount,
+            currency: "USD",
+            clearinghouseState: "AUTHORIZED_IN_ESCROW",
+            escrowStatus: "AUTHORIZED_HOLD",
+            riskScore: randomScore,
+            riskTier: randomScore <= 30 ? "LOW" : randomScore <= 70 ? "ELEVATED" : "CRITICAL_HITL",
+            hitlStatus: randomScore > 70 ? "PENDING_APPROVAL" : "NOT_REQUIRED",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            sequenceNumber: nextSeq,
+            timestampMicros: Date.now() * 1000,
+          };
+          handleTransaction({ add: [newTx], update: [], remove: [] });
+        }
+
+        return nextSeq;
+      });
+    }, 1500);
+
+    return () => {
+      if (simTimerRef.current) clearInterval(simTimerRef.current);
+    };
+  }, [simulationActive, handleTransaction]);
 
   useEffect(() => {
     return () => {
       if (statsRafRef.current !== null && typeof window !== "undefined") {
         window.cancelAnimationFrame(statsRafRef.current);
       }
+      if (simTimerRef.current) clearInterval(simTimerRef.current);
     };
   }, []);
+
+  const displaySequence = isConnected ? lastSequenceNumber : seqNumber;
+  const initialRowData = snapshot.length > 0 ? snapshot : INITIAL_DEMO_RECORDS;
 
   return (
     <div className="min-h-screen bg-[#0B0F17] text-slate-100 flex flex-col font-sans">
@@ -132,11 +261,29 @@ export const App: React.FC = () => {
         </div>
 
         {/* Real-Time Telemetry Bar */}
-        <div className="flex items-center gap-5 text-xs font-mono">
+        <div className="flex items-center gap-4 text-xs font-mono">
+          {/* Simulation Toggle */}
+          <button
+            type="button"
+            onClick={() => setSimulationActive((prev) => !prev)}
+            className={`px-3 py-1 rounded text-[11px] font-sans font-medium transition-all border flex items-center gap-1.5 ${
+              simulationActive
+                ? "bg-sky-500/20 text-sky-300 border-sky-500 shadow-sm shadow-sky-500/20"
+                : "bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700"
+            }`}
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${
+                simulationActive ? "bg-sky-400 animate-ping" : "bg-slate-500"
+              }`}
+            />
+            {simulationActive ? "Streaming Active (Stop)" : "Simulate Live Feed"}
+          </button>
+
           <div className="flex items-center gap-2">
             <span className="text-slate-500">SEQ:</span>
             <span className="text-sky-400 font-semibold">
-              #{lastSequenceNumber.toString().padStart(6, "0")}
+              #{displaySequence.toString().padStart(6, "0")}
             </span>
           </div>
 
@@ -153,7 +300,7 @@ export const App: React.FC = () => {
                   ? "bg-emerald-400 animate-pulse"
                   : connectionStatus === "reconnecting"
                     ? "bg-amber-400 animate-ping"
-                    : "bg-rose-500"
+                    : "bg-slate-500"
               }`}
             />
             <span
@@ -162,10 +309,10 @@ export const App: React.FC = () => {
                   ? "text-emerald-400"
                   : connectionStatus === "reconnecting"
                     ? "text-amber-400"
-                    : "text-rose-400"
+                    : "text-slate-400"
               }`}
             >
-              {connectionStatus}
+              {isConnected ? "WS Live" : "Demo Standalone"}
             </span>
           </div>
 
@@ -182,7 +329,7 @@ export const App: React.FC = () => {
           >
             {isConnected || connectionStatus === "connecting" || connectionStatus === "reconnecting"
               ? "Disconnect"
-              : "Connect"}
+              : "Connect WS"}
           </button>
         </div>
       </header>
@@ -233,8 +380,11 @@ export const App: React.FC = () => {
       <main className="flex-1 px-6 pb-6 flex flex-col">
         <ClearinghouseGrid
           ref={gridRef}
-          rowData={snapshot}
+          rowData={initialRowData}
           apiBaseUrl={apiBaseUrl}
+          onApprove={handleApprove}
+          onVoid={handleVoid}
+          onDispute={handleDispute}
           className="w-full flex-1 min-h-[580px]"
         />
       </main>
