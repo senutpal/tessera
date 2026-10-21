@@ -86,10 +86,14 @@ export class DisputeResolutionHandler {
 
     const resolvedAt = new Date().toISOString();
 
+    const transactionId = options.transactionId
+      ? asTransactionId(String(options.transactionId).trim())
+      : asTransactionId(disputeId);
+
     const event: DisputeResolvedEvent = {
       type: "dispute.resolved",
       disputeId,
-      transactionId: asTransactionId(disputeId),
+      transactionId,
       resolutionAction: "ACCEPT_CLAIM",
       resolvedAt,
       refundAmount: options.refundAmount,
@@ -97,7 +101,11 @@ export class DisputeResolutionHandler {
     };
 
     if (this.options.eventSink?.emitResolved) {
-      await this.options.eventSink.emitResolved(event);
+      try {
+        await this.options.eventSink.emitResolved(event);
+      } catch {
+        // Safe sink execution: do not fail completed claim acceptance
+      }
     }
 
     return {
@@ -159,17 +167,25 @@ export class DisputeResolutionHandler {
 
     const escalatedAt = new Date().toISOString();
 
+    const transactionId = options.transactionId
+      ? asTransactionId(String(options.transactionId).trim())
+      : asTransactionId(disputeId);
+
     const event: DisputeEscalatedEvent = {
       type: "dispute.escalated",
       disputeId,
-      transactionId: asTransactionId(disputeId),
+      transactionId,
       escalatedAt,
       note,
       reason: options.buyerEscalationReason,
     };
 
     if (this.options.eventSink?.emitEscalated) {
-      await this.options.eventSink.emitEscalated(event);
+      try {
+        await this.options.eventSink.emitEscalated(event);
+      } catch {
+        // Safe sink execution: do not fail completed PayPal escalation
+      }
     }
 
     return {
@@ -189,12 +205,15 @@ export class DisputeResolutionHandler {
     dispute: ClearinghouseDispute,
     context: DisputeEvaluationContext = {},
   ): Promise<DisputePolicyDecision> {
+    const safeRefundAmount = dispute.disputeAmount.amount > 0 ? dispute.disputeAmount : undefined;
+
     // 1. Supervisor override always takes precedence
     if (context.supervisorOverride) {
       const result = await this.acceptClaim({
         disputeId: dispute.disputeId,
+        transactionId: dispute.transactionId,
         note: "Supervisor override approved dispute claim acceptance",
-        refundAmount: dispute.disputeAmount,
+        refundAmount: safeRefundAmount,
       });
       return {
         action: "ACCEPT_CLAIM",
@@ -207,8 +226,9 @@ export class DisputeResolutionHandler {
     if (context.reason === "NON_DELIVERABLE" && this.policy.autoAcceptNonDeliverable !== false) {
       const result = await this.acceptClaim({
         disputeId: dispute.disputeId,
+        transactionId: dispute.transactionId,
         note: "Autonomous resolution: product confirmed non-deliverable by carrier logs",
-        refundAmount: dispute.disputeAmount,
+        refundAmount: safeRefundAmount,
       });
       return {
         action: "ACCEPT_CLAIM",
@@ -221,8 +241,9 @@ export class DisputeResolutionHandler {
     if (context.reason === "DEFECTIVE_OR_DAMAGED" && this.policy.autoAcceptDamaged === true) {
       const result = await this.acceptClaim({
         disputeId: dispute.disputeId,
+        transactionId: dispute.transactionId,
         note: "Autonomous resolution: item verified damaged or defective",
-        refundAmount: dispute.disputeAmount,
+        refundAmount: safeRefundAmount,
       });
       return {
         action: "ACCEPT_CLAIM",
@@ -232,9 +253,20 @@ export class DisputeResolutionHandler {
     }
 
     // 4. Delivery proved but buyer remains unresponsive or dispute exceeded SLA
-    if (context.isDeliveredWithProof && context.buyerUnresponsiveSlaExpired) {
+    let isBuyerSlaExpired = context.buyerUnresponsiveSlaExpired ?? false;
+    if (!isBuyerSlaExpired && this.policy.autoEscalateAfterSlaMs !== undefined) {
+      if (dispute.buyerResponseDueDate) {
+        isBuyerSlaExpired = new Date(dispute.buyerResponseDueDate).getTime() <= Date.now();
+      } else if (dispute.createTime) {
+        isBuyerSlaExpired =
+          Date.now() - new Date(dispute.createTime).getTime() >= this.policy.autoEscalateAfterSlaMs;
+      }
+    }
+
+    if (context.isDeliveredWithProof && isBuyerSlaExpired) {
       const result = await this.escalateDispute({
         disputeId: dispute.disputeId,
+        transactionId: dispute.transactionId,
         note: "Merchant confirmed delivery with carrier tracking proof; buyer dispute unresolved beyond SLA window",
       });
       return {

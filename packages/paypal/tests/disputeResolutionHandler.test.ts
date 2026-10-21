@@ -247,6 +247,30 @@ describe("DisputeResolutionHandler", () => {
         handler.escalateDispute({ disputeId: "PP-D-77889", note: "Escalating" }),
       ).rejects.toThrow(DisputeError);
     });
+
+    it("does not fail claim acceptance when event sink throws an error", async () => {
+      const fetchSpy = vi.fn();
+      globalThis.fetch = fetchSpy;
+
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify(createMockTokenResponse()), { status: 200 }),
+      );
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify(createMockSubsequentActionResponse()), { status: 200 }),
+      );
+
+      const eventSink: DisputeEventSink = {
+        emitResolved: () => {
+          throw new Error("Sink persistence failure");
+        },
+      };
+
+      const auth = new PayPalAuthClient(dummyConfig);
+      const handler = new DisputeResolutionHandler(auth, { eventSink });
+
+      const result = await handler.acceptClaim({ disputeId: "PP-D-77889" });
+      expect(result.status).toBe("CLAIM_ACCEPTED");
+    });
   });
 
   describe("evaluatePolicyAndResolve", () => {
@@ -352,6 +376,61 @@ describe("DisputeResolutionHandler", () => {
       if (decision.action === "ESCALATE") {
         expect(decision.result.status).toBe("ESCALATED");
       }
+    });
+
+    it("escalates using autoEscalateAfterSlaMs policy when dispute createTime exceeds threshold", async () => {
+      const fetchSpy = vi.fn();
+      globalThis.fetch = fetchSpy;
+
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify(createMockTokenResponse()), { status: 200 }),
+      );
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify(createMockSubsequentActionResponse()), { status: 200 }),
+      );
+
+      const auth = new PayPalAuthClient(dummyConfig);
+      const handler = new DisputeResolutionHandler(auth, {
+        policy: { autoEscalateAfterSlaMs: 3600_000 },
+      });
+
+      const oldCreateTime = new Date(Date.now() - 7200_000).toISOString();
+      const dispute = createMockDisputeDomain({
+        create_time: oldCreateTime,
+      });
+
+      const decision = await handler.evaluatePolicyAndResolve(dispute, {
+        isDeliveredWithProof: true,
+      });
+
+      expect(decision.action).toBe("ESCALATE");
+    });
+
+    it("does not serialize zero USD refund_amount when dispute amount is zero", async () => {
+      const fetchSpy = vi.fn();
+      globalThis.fetch = fetchSpy;
+
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify(createMockTokenResponse()), { status: 200 }),
+      );
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify(createMockSubsequentActionResponse()), { status: 200 }),
+      );
+
+      const auth = new PayPalAuthClient(dummyConfig);
+      const handler = new DisputeResolutionHandler(auth);
+
+      const dispute = createMockDisputeDomain({
+        dispute_amount: { currency_code: "USD", value: "0.00" },
+      });
+      await handler.evaluatePolicyAndResolve(dispute, {
+        supervisorOverride: true,
+      });
+
+      const call = fetchSpy.mock.calls[1];
+      const calledOptions = call?.[1] as RequestInit;
+      const body = JSON.parse(calledOptions.body as string);
+      expect(body.refund_amount).toBeUndefined();
     });
 
     it("recommends evidence submission when seller response is pending and tracking proof is available", async () => {
