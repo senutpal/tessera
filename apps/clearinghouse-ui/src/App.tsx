@@ -44,7 +44,17 @@ export const App: React.FC = () => {
   }, [theme]);
 
   const toggleTheme = useCallback(() => {
-    setTheme((curr) => (curr === "dark" ? "light" : "dark"));
+    setTheme((curr) => {
+      const next = curr === "dark" ? "light" : "dark";
+      if (typeof document !== "undefined") {
+        if (next === "dark") {
+          document.documentElement.classList.add("dark");
+        } else {
+          document.documentElement.classList.remove("dark");
+        }
+      }
+      return next;
+    });
   }, []);
 
   const showToast = useCallback((msg: string) => {
@@ -314,28 +324,10 @@ export const App: React.FC = () => {
       {/* Top Header / Status Bar */}
       <header className="border-b border-zinc-200 dark:border-zinc-800 bg-white/90 dark:bg-zinc-950/80 backdrop-blur-md px-6 py-3 flex flex-wrap items-center justify-between gap-4 sticky top-0 z-20 transition-colors duration-150">
         <div className="flex items-center gap-3">
-          {/* Tessera Polygonal Brand Logo */}
-          <div className="relative w-7 h-7 rounded-lg bg-zinc-900 dark:bg-zinc-100 flex items-center justify-center shadow-sm">
-            <div className="w-3 h-3 border-2 border-emerald-500 dark:border-emerald-600 rotate-45 rounded-[1.5px]" />
-          </div>
-
-          <div className="flex flex-col">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold tracking-[0.2em] font-mono text-zinc-900 dark:text-zinc-100 uppercase">
-                TESSERA
-              </span>
-              <span className="text-zinc-400 dark:text-zinc-600 font-mono text-xs">/</span>
-              <span className="text-xs text-zinc-700 dark:text-zinc-300 font-sans font-medium tracking-tight">
-                Clearinghouse Institutional Suite
-              </span>
-              <span className="ml-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-800 font-medium">
-                AP2 v1
-              </span>
-            </div>
-            <span className="text-[10px] text-zinc-500 font-mono tracking-wider">
-              AUTONOMOUS SPENDING CONTROL & ESCROW TELEMETRY
-            </span>
-          </div>
+          <img src="/logo.png" alt="TESSERA" className="w-7 h-7 object-contain dark:invert" />
+          <span className="text-xs font-bold tracking-[0.2em] font-mono text-zinc-900 dark:text-zinc-100 uppercase">
+            TESSERA
+          </span>
         </div>
 
         {/* Real-Time Telemetry & Controls */}
@@ -453,14 +445,14 @@ export const App: React.FC = () => {
               <span className="w-2 h-2 rounded-full bg-emerald-500 dark:bg-emerald-400" />
             </div>
 
-            <div className="flex items-baseline justify-between gap-2">
+            <div className="flex items-center justify-between gap-2">
               <span className="text-2xl lg:text-3xl font-semibold font-mono tracking-tight tabular-nums text-zinc-900 dark:text-zinc-100">
                 {new Intl.NumberFormat("en-US", {
                   style: "currency",
                   currency: "USD",
                 }).format(stats.totalVolume / 100)}
               </span>
-              <span className="text-[11px] font-mono text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-500/20 font-medium">
+              <span className="text-[11px] font-mono tracking-tight text-emerald-700 dark:text-emerald-400 bg-emerald-500/[0.06] dark:bg-emerald-500/[0.08] px-2 py-0.5 rounded-md border border-emerald-500/20 dark:border-emerald-500/20 font-medium">
                 +18.4% 24h
               </span>
             </div>
@@ -505,7 +497,7 @@ export const App: React.FC = () => {
               )}
             </div>
 
-            <div className="flex items-baseline gap-2.5">
+            <div className="flex items-center gap-2.5">
               <span
                 className={`text-2xl lg:text-3xl font-semibold font-mono tracking-tight tabular-nums ${
                   stats.pendingHitl > 0
@@ -516,7 +508,7 @@ export const App: React.FC = () => {
                 {stats.pendingHitl}
               </span>
               {stats.pendingHitl > 0 && (
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-500/25 uppercase tracking-wider font-semibold">
+                <span className="text-[10px] font-mono tracking-tight px-2 py-0.5 rounded-md bg-amber-500/[0.06] dark:bg-amber-500/[0.08] text-amber-700 dark:text-amber-400 border border-amber-500/20 dark:border-amber-500/25 uppercase tracking-wider font-semibold">
                   Action Required
                 </span>
               )}
@@ -548,7 +540,7 @@ export const App: React.FC = () => {
               )}
             </div>
 
-            <div className="flex items-baseline gap-2.5">
+            <div className="flex items-center gap-2.5">
               <span
                 className={`text-2xl lg:text-3xl font-semibold font-mono tracking-tight tabular-nums ${
                   stats.criticalRisk > 0
@@ -559,7 +551,7 @@ export const App: React.FC = () => {
                 {stats.criticalRisk}
               </span>
               {stats.criticalRisk > 0 && (
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-50 dark:bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-500/25 uppercase tracking-wider font-semibold">
+                <span className="text-[10px] font-mono tracking-tight px-2 py-0.5 rounded-md bg-rose-500/[0.06] dark:bg-rose-500/[0.08] text-rose-700 dark:text-rose-400 border border-rose-500/20 dark:border-rose-500/25 uppercase tracking-wider font-semibold">
                   High Severity
                 </span>
               )}
@@ -583,11 +575,11 @@ export const App: React.FC = () => {
               <span className="w-2 h-2 rounded-full bg-sky-500 dark:bg-cyan-400" />
             </div>
 
-            <div className="flex items-baseline justify-between gap-2">
+            <div className="flex items-center justify-between gap-2">
               <span className="text-2xl lg:text-3xl font-semibold font-mono tracking-tight tabular-nums text-zinc-900 dark:text-zinc-100">
                 &lt; 50 µs
               </span>
-              <span className="text-[11px] font-mono text-sky-700 dark:text-cyan-400 bg-sky-50 dark:bg-cyan-500/10 px-2 py-0.5 rounded border border-sky-200 dark:border-cyan-500/20 font-medium">
+              <span className="text-[11px] font-mono tracking-tight text-sky-700 dark:text-cyan-400 bg-cyan-500/[0.06] dark:bg-cyan-500/[0.08] px-2 py-0.5 rounded-md border border-cyan-500/20 dark:border-cyan-500/20 font-medium">
                 p99: 38 µs
               </span>
             </div>

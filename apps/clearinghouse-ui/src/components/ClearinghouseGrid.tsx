@@ -12,7 +12,15 @@ import type {
 import { LicenseManager } from "ag-grid-enterprise";
 import { AgGridReact } from "ag-grid-react";
 import type React from "react";
-import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ClearinghouseAuditBundle, ClearinghouseRecord, GridTransaction } from "../types.js";
 import { ActionCellRenderer } from "./renderers/ActionCellRenderer.js";
 import { RiskCellRenderer } from "./renderers/RiskCellRenderer.js";
@@ -100,6 +108,14 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
     const [quickFilter, setQuickFilterState] = useState<string>("");
     const gridApiRef = useRef<GridApi<ClearinghouseRecord> | null>(null);
     const pendingTransactionsRef = useRef<GridTransaction[]>([]);
+
+    // Redraw rows and headers synchronously when theme switches
+    useEffect(() => {
+      if (gridApiRef.current && theme) {
+        gridApiRef.current.redrawRows();
+        gridApiRef.current.refreshHeader();
+      }
+    }, [theme]);
 
     const getGridRecords = useCallback((): ClearinghouseRecord[] => {
       if (gridApiRef.current) {
@@ -308,6 +324,7 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
           minWidth: 185,
           flex: 1,
           filter: "agTextColumnFilter",
+          cellClass: "flex items-center",
           cellRenderer: StatusBadgeRenderer,
         },
         {
@@ -317,6 +334,7 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
           minWidth: 175,
           flex: 1,
           filter: "agTextColumnFilter",
+          cellClass: "flex items-center",
           cellRenderer: StatusBadgeRenderer,
         },
         {
@@ -326,6 +344,7 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
           minWidth: 140,
           filter: "agNumberColumnFilter",
           sortable: true,
+          cellClass: "flex items-center",
           cellRenderer: RiskCellRenderer,
           comparator: (valueA: number, valueB: number) => valueA - valueB,
         },
@@ -335,6 +354,7 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
           width: 150,
           minWidth: 140,
           filter: "agTextColumnFilter",
+          cellClass: "flex items-center",
           cellRenderer: StatusBadgeRenderer,
         },
         {
@@ -354,6 +374,8 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
           pinned: "right",
           sortable: false,
           filter: false,
+          headerClass: "ag-center-aligned-header",
+          cellClass: "flex items-center justify-center",
           cellRenderer: ActionCellRenderer,
         },
       ];
@@ -435,13 +457,13 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
                 value={quickFilter}
                 onChange={handleQuickFilterChange}
                 placeholder="Filter ledger (mandate, merchant, agent)..."
-                className="bg-white dark:bg-zinc-950/90 border border-zinc-200 dark:border-zinc-800 rounded-lg pl-9 pr-8 py-1.5 text-xs text-zinc-900 dark:text-zinc-200 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-600 font-mono w-72 transition-colors"
+                className="bg-white dark:bg-zinc-950/90 border border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 rounded-lg pl-9 pr-8 py-1.5 text-xs text-zinc-900 dark:text-zinc-200 placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:border-zinc-400 dark:focus:border-zinc-600 focus:ring-1 focus:ring-zinc-400/40 dark:focus:ring-zinc-600/40 font-mono w-72 transition-all duration-150 shadow-xs"
               />
               {quickFilter ? (
                 <button
                   type="button"
                   onClick={() => applyQuickFilter("")}
-                  className="absolute right-2 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 text-xs px-1"
+                  className="absolute right-2.5 w-4 h-4 rounded-full flex items-center justify-center text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-[10px] transition-colors"
                 >
                   ✕
                 </button>
@@ -457,10 +479,10 @@ export const ClearinghouseGrid = forwardRef<ClearinghouseGridHandle, Clearinghou
                     key={chip.id}
                     type="button"
                     onClick={() => applyQuickFilter(chip.value)}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-mono transition-all duration-150 border active:scale-[0.97] ${
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-mono tracking-tight transition-all duration-150 border active:scale-[0.97] ${
                       isActive
-                        ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 border-zinc-900 dark:border-zinc-100 font-medium"
-                        : "bg-white dark:bg-zinc-900/60 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 border-zinc-200 dark:border-zinc-800"
+                        ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 border-zinc-900 dark:border-zinc-100 font-medium shadow-sm"
+                        : "bg-zinc-500/[0.04] dark:bg-zinc-500/[0.06] hover:bg-zinc-500/[0.08] dark:hover:bg-zinc-500/[0.12] text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 border-zinc-500/20 dark:border-zinc-500/20"
                     }`}
                   >
                     {chip.label}

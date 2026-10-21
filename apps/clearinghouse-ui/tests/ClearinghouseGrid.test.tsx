@@ -807,5 +807,19 @@ describe("AG Grid Enterprise Clearinghouse Dashboard UI", () => {
       // Verify toggle button remains accessible and functional
       expect(themeBtn).toBeInTheDocument();
     });
+
+    it("renders ultra-clean minimal header lockup without legacy subtext", () => {
+      render(<App />);
+
+      // Verify TESSERA brand name and logo image
+      const brandLogo = screen.getByRole("img", { name: "TESSERA" });
+      expect(brandLogo).toBeInTheDocument();
+      expect(brandLogo).toHaveAttribute("src", "/logo.png");
+      expect(screen.getByText("TESSERA")).toBeInTheDocument();
+
+      // Verify removed cluttered branding elements are not rendered
+      expect(screen.queryByText(/clearinghouse institutional suite/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/autonomous spending control/i)).not.toBeInTheDocument();
+    });
   });
 });

@@ -108,9 +108,6 @@ export const TransactionDetailDrawer: React.FC<TransactionDetailDrawerProps> = (
                 <span className="text-xs font-mono font-semibold tracking-wider text-zinc-500 dark:text-zinc-400 uppercase">
                   Mandate Inspector
                 </span>
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-800">
-                  AP2 v1
-                </span>
               </div>
               <h2 className="text-sm font-mono font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
                 {record.transactionId}
@@ -154,8 +151,9 @@ export const TransactionDetailDrawer: React.FC<TransactionDetailDrawerProps> = (
               <span className="text-3xl font-semibold font-mono tracking-tight text-zinc-900 dark:text-zinc-100">
                 {formattedAmount}
               </span>
-              <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-500/20 font-medium">
-                {record.currency} HOLD
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-mono tracking-tight px-2 py-0.5 rounded-md bg-emerald-500/[0.06] dark:bg-emerald-500/[0.08] text-emerald-700 dark:text-emerald-300 border border-emerald-500/20 dark:border-emerald-500/20 font-medium">
+                <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-500 dark:bg-emerald-400 opacity-75" />
+                <span>{record.currency} HOLD</span>
               </span>
             </div>
 
@@ -180,15 +178,26 @@ export const TransactionDetailDrawer: React.FC<TransactionDetailDrawerProps> = (
                 </h3>
               </div>
               <span
-                className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border uppercase tracking-wider ${
+                className={`inline-flex items-center gap-1.5 text-[11px] font-mono tracking-tight font-medium px-2 py-0.5 rounded-md border uppercase whitespace-nowrap ${
                   riskTier === "low"
-                    ? "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-500/20"
+                    ? "bg-emerald-500/[0.06] dark:bg-emerald-500/[0.08] text-emerald-700 dark:text-emerald-400 border-emerald-500/20 dark:border-emerald-500/20"
                     : riskTier === "elevated"
-                      ? "bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/20"
-                      : "bg-rose-50 dark:bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-200 dark:border-rose-500/20 animate-pulse"
+                      ? "bg-amber-500/[0.06] dark:bg-amber-500/[0.08] text-amber-700 dark:text-amber-400 border-amber-500/20 dark:border-amber-500/20"
+                      : "bg-rose-500/[0.06] dark:bg-rose-500/[0.08] text-rose-700 dark:text-rose-400 border-rose-500/20 dark:border-rose-500/20 animate-pulse"
                 }`}
               >
-                Score {record.riskScore}/100 · {riskTier.toUpperCase()}
+                <span
+                  className={`w-1.5 h-1.5 rounded-full shrink-0 opacity-75 ${
+                    riskTier === "low"
+                      ? "bg-emerald-500 dark:bg-emerald-400"
+                      : riskTier === "elevated"
+                        ? "bg-amber-500 dark:bg-amber-400"
+                        : "bg-rose-500 dark:bg-rose-400"
+                  }`}
+                />
+                <span>
+                  Score {record.riskScore}/100 · {riskTier.toUpperCase()}
+                </span>
               </span>
             </div>
 
@@ -301,7 +310,7 @@ export const TransactionDetailDrawer: React.FC<TransactionDetailDrawerProps> = (
 
           {/* Dispute Details if applicable */}
           {record.disputeReason && (
-            <div className="rounded-xl border border-rose-200 dark:border-rose-500/20 bg-rose-50 dark:bg-rose-500/[0.05] p-4 space-y-2 text-xs font-mono">
+            <div className="rounded-xl border border-rose-500/20 dark:border-rose-500/20 bg-rose-500/[0.06] dark:bg-rose-500/[0.08] p-4 space-y-2 text-xs font-mono">
               <div className="flex items-center gap-2 text-rose-700 dark:text-rose-400">
                 <AlertTriangle className="w-4 h-4" />
                 <span className="font-semibold uppercase tracking-wider">
@@ -325,15 +334,15 @@ export const TransactionDetailDrawer: React.FC<TransactionDetailDrawerProps> = (
               data-testid="drawer-action-approve"
               disabled={activeAction !== null || isTerminal || isApproved}
               onClick={() => handleAction("counter-sign")}
-              className={`px-3 py-2 rounded-lg text-xs font-sans font-medium border flex items-center justify-center gap-1.5 transition-all ${
+              className={`px-3 py-2 rounded-lg text-xs font-mono tracking-tight font-medium border flex items-center justify-center gap-1.5 transition-all ${
                 activeAction === "counter-sign"
-                  ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-400 border-emerald-300 dark:border-emerald-500/50 cursor-wait"
+                  ? "bg-emerald-500/[0.15] dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-400 border-emerald-500/30 dark:border-emerald-500/50 cursor-wait"
                   : isTerminal || isApproved
-                    ? "bg-zinc-100 dark:bg-zinc-900/40 text-zinc-400 dark:text-zinc-600 border-zinc-200 dark:border-zinc-800/40 cursor-not-allowed opacity-50"
-                    : "bg-emerald-50 dark:bg-emerald-500/15 hover:bg-emerald-100 dark:hover:bg-emerald-500/25 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/30 active:scale-[0.97]"
+                    ? "bg-zinc-500/[0.04] dark:bg-zinc-900/40 text-zinc-400 dark:text-zinc-600 border-zinc-500/[0.15] dark:border-zinc-800/40 cursor-not-allowed opacity-50"
+                    : "bg-emerald-500/[0.06] dark:bg-emerald-500/[0.08] hover:bg-emerald-500/[0.12] dark:hover:bg-emerald-500/[0.15] text-emerald-700 dark:text-emerald-300 border-emerald-500/20 dark:border-emerald-500/20 active:scale-[0.97]"
               }`}
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
+              <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-emerald-500 dark:bg-emerald-400 opacity-75" />
               <span>{isApproved ? "Approved" : "Approve"}</span>
             </button>
 
@@ -343,15 +352,15 @@ export const TransactionDetailDrawer: React.FC<TransactionDetailDrawerProps> = (
               data-testid="drawer-action-void"
               disabled={activeAction !== null || isTerminal || isVoided}
               onClick={() => handleAction("void")}
-              className={`px-3 py-2 rounded-lg text-xs font-sans font-medium border flex items-center justify-center gap-1.5 transition-all ${
+              className={`px-3 py-2 rounded-lg text-xs font-mono tracking-tight font-medium border flex items-center justify-center gap-1.5 transition-all ${
                 activeAction === "void"
-                  ? "bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-400 border-amber-300 dark:border-amber-500/50 cursor-wait"
+                  ? "bg-amber-500/[0.15] dark:bg-amber-950/60 text-amber-800 dark:text-amber-400 border-amber-500/30 dark:border-amber-500/50 cursor-wait"
                   : isTerminal || isVoided
-                    ? "bg-zinc-100 dark:bg-zinc-900/40 text-zinc-400 dark:text-zinc-600 border-zinc-200 dark:border-zinc-800/40 cursor-not-allowed opacity-50"
-                    : "bg-amber-50 dark:bg-amber-500/15 hover:bg-amber-100 dark:hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/30 active:scale-[0.97]"
+                    ? "bg-zinc-500/[0.04] dark:bg-zinc-900/40 text-zinc-400 dark:text-zinc-600 border-zinc-500/[0.15] dark:border-zinc-800/40 cursor-not-allowed opacity-50"
+                    : "bg-amber-500/[0.06] dark:bg-amber-500/[0.08] hover:bg-amber-500/[0.12] dark:hover:bg-amber-500/[0.15] text-amber-700 dark:text-amber-300 border-amber-500/20 dark:border-amber-500/20 active:scale-[0.97]"
               }`}
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 dark:bg-amber-400" />
+              <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-amber-500 dark:bg-amber-400 opacity-75" />
               <span>{isVoided ? "Voided" : "Void Escrow"}</span>
             </button>
 
@@ -361,15 +370,15 @@ export const TransactionDetailDrawer: React.FC<TransactionDetailDrawerProps> = (
               data-testid="drawer-action-dispute"
               disabled={activeAction !== null || isTerminal || isDisputed}
               onClick={() => handleAction("dispute")}
-              className={`px-3 py-2 rounded-lg text-xs font-sans font-medium border flex items-center justify-center gap-1.5 transition-all ${
+              className={`px-3 py-2 rounded-lg text-xs font-mono tracking-tight font-medium border flex items-center justify-center gap-1.5 transition-all ${
                 activeAction === "dispute"
-                  ? "bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-400 border-rose-300 dark:border-rose-500/50 cursor-wait"
+                  ? "bg-rose-500/[0.15] dark:bg-rose-950/60 text-rose-800 dark:text-rose-400 border-rose-500/30 dark:border-rose-500/50 cursor-wait"
                   : isTerminal || isDisputed
-                    ? "bg-zinc-100 dark:bg-zinc-900/40 text-zinc-400 dark:text-zinc-600 border-zinc-200 dark:border-zinc-800/40 cursor-not-allowed opacity-50"
-                    : "bg-rose-50 dark:bg-rose-500/15 hover:bg-rose-100 dark:hover:bg-rose-500/25 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-500/30 active:scale-[0.97]"
+                    ? "bg-zinc-500/[0.04] dark:bg-zinc-900/40 text-zinc-400 dark:text-zinc-600 border-zinc-500/[0.15] dark:border-zinc-800/40 cursor-not-allowed opacity-50"
+                    : "bg-rose-500/[0.06] dark:bg-rose-500/[0.08] hover:bg-rose-500/[0.12] dark:hover:bg-rose-500/[0.15] text-rose-700 dark:text-rose-300 border-rose-500/20 dark:border-rose-500/20 active:scale-[0.97]"
               }`}
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 dark:bg-rose-400" />
+              <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-rose-500 dark:bg-rose-400 opacity-75" />
               <span>{isDisputed ? "Disputed" : "Dispute"}</span>
             </button>
           </div>

@@ -22,21 +22,21 @@ export const RiskCellRenderer: React.FC<RiskCellRendererProps> = (props) => {
   if (tier === "low") {
     tierLabel = "LOW";
     badgeStyle =
-      "text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/[0.08] border-emerald-200 dark:border-emerald-500/20 hover:bg-emerald-100 dark:hover:bg-emerald-500/[0.15]";
+      "text-emerald-700 dark:text-emerald-400 bg-emerald-500/[0.06] dark:bg-emerald-500/[0.08] border-emerald-500/20 dark:border-emerald-500/20";
     barColor = "bg-emerald-500 dark:bg-emerald-400";
-    dotColor = "bg-emerald-600 dark:bg-emerald-400";
+    dotColor = "bg-emerald-500 dark:bg-emerald-400";
   } else if (tier === "elevated") {
     tierLabel = "ELEVATED";
     badgeStyle =
-      "text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/[0.08] border-amber-200 dark:border-amber-500/20 hover:bg-amber-100 dark:hover:bg-amber-500/[0.15]";
+      "text-amber-700 dark:text-amber-400 bg-amber-500/[0.06] dark:bg-amber-500/[0.08] border-amber-500/20 dark:border-amber-500/20";
     barColor = "bg-amber-500 dark:bg-amber-400";
-    dotColor = "bg-amber-600 dark:bg-amber-400";
+    dotColor = "bg-amber-500 dark:bg-amber-400";
   } else {
     tierLabel = "CRITICAL";
     badgeStyle =
-      "text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-500/[0.08] border-rose-200 dark:border-rose-500/20 hover:bg-rose-100 dark:hover:bg-rose-500/[0.15] animate-pulse";
+      "text-rose-700 dark:text-rose-400 bg-rose-500/[0.06] dark:bg-rose-500/[0.08] border-rose-500/20 dark:border-rose-500/20 animate-pulse";
     barColor = "bg-rose-500 dark:bg-rose-400";
-    dotColor = "bg-rose-600 dark:bg-rose-400";
+    dotColor = "bg-rose-500 dark:bg-rose-400";
   }
 
   return (
@@ -44,12 +44,12 @@ export const RiskCellRenderer: React.FC<RiskCellRendererProps> = (props) => {
       data-testid="risk-cell"
       data-risk-tier={tier}
       data-risk-score={clampedScore}
-      className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-md border text-xs font-mono font-medium transition-colors whitespace-nowrap ${badgeStyle}`}
+      className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 border text-[11px] font-mono tracking-tight font-medium transition-colors whitespace-nowrap ${badgeStyle}`}
     >
-      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor} opacity-80`} />
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor} opacity-75`} />
       <span className="font-semibold tabular-nums">{clampedScore}</span>
       <span className="text-[10px] opacity-70 uppercase tracking-wider font-mono">{tierLabel}</span>
-      <div className="w-10 h-1 bg-zinc-200 dark:bg-zinc-800/80 rounded-full overflow-hidden shrink-0 ml-0.5">
+      <div className="w-8 h-1 bg-zinc-200/80 dark:bg-zinc-800/80 rounded-full overflow-hidden shrink-0 ml-0.5">
         <div
           className={`h-full ${barColor} transition-all duration-300 ease-out`}
           style={{ width: `${clampedScore}%` }}

@@ -120,7 +120,7 @@ export const ActionCellRenderer: React.FC<ActionCellRendererProps> = (props) => 
   return (
     <div
       data-testid="action-cell"
-      className="inline-flex items-center gap-1.5 py-1 font-sans text-xs"
+      className="flex items-center justify-center w-full h-full gap-1.5 font-sans text-xs"
     >
       {/* 1-Click HITL Approve / Counter-Sign */}
       <button
@@ -132,21 +132,21 @@ export const ActionCellRenderer: React.FC<ActionCellRendererProps> = (props) => 
           e.stopPropagation();
           executeAction("counter-sign");
         }}
-        className={`px-2.5 py-1 rounded-md font-medium text-xs border transition-all duration-150 flex items-center gap-1.5 whitespace-nowrap ${
+        className={`rounded-md px-2 py-0.5 font-mono tracking-tight text-[11px] font-medium border transition-all duration-150 flex items-center gap-1.5 whitespace-nowrap ${
           activeAction === "counter-sign"
-            ? "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-400 border-emerald-300 dark:border-emerald-500/50 cursor-wait"
+            ? "bg-emerald-500/[0.15] dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-400 border-emerald-500/30 dark:border-emerald-500/50 cursor-wait"
             : isTerminal || isApproved
-              ? "bg-zinc-100 dark:bg-zinc-900/40 text-zinc-400 dark:text-zinc-600 border-zinc-200 dark:border-zinc-800/40 cursor-not-allowed opacity-40"
-              : "bg-emerald-50 dark:bg-emerald-500/[0.08] text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-500/20 hover:bg-emerald-100 dark:hover:bg-emerald-500/[0.15] hover:border-emerald-300 dark:hover:border-emerald-500/40 active:scale-[0.98]"
+              ? "bg-zinc-500/[0.04] dark:bg-zinc-900/40 text-zinc-400 dark:text-zinc-600 border-zinc-500/[0.15] dark:border-zinc-800/40 cursor-not-allowed opacity-40"
+              : "bg-emerald-500/[0.06] dark:bg-emerald-500/[0.08] text-emerald-700 dark:text-emerald-300 border-emerald-500/20 dark:border-emerald-500/20 hover:bg-emerald-500/[0.12] dark:hover:bg-emerald-500/[0.15] hover:border-emerald-500/40 dark:hover:border-emerald-500/40 active:scale-[0.98]"
         }`}
       >
         <span
-          className={`w-1.5 h-1.5 rounded-full ${
+          className={`w-1.5 h-1.5 rounded-full shrink-0 ${
             activeAction === "counter-sign"
               ? "bg-emerald-500 dark:bg-emerald-400 animate-pulse"
               : isApproved
                 ? "bg-zinc-400 dark:bg-zinc-600"
-                : "bg-emerald-500 dark:bg-emerald-400"
+                : "bg-emerald-500 dark:bg-emerald-400 opacity-75"
           }`}
         />
         <span>
@@ -164,21 +164,21 @@ export const ActionCellRenderer: React.FC<ActionCellRendererProps> = (props) => 
           e.stopPropagation();
           executeAction("void");
         }}
-        className={`px-2.5 py-1 rounded-md font-medium text-xs border transition-all duration-150 flex items-center gap-1.5 whitespace-nowrap ${
+        className={`rounded-md px-2 py-0.5 font-mono tracking-tight text-[11px] font-medium border transition-all duration-150 flex items-center gap-1.5 whitespace-nowrap ${
           activeAction === "void"
-            ? "bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-400 border-amber-300 dark:border-amber-500/50 cursor-wait"
+            ? "bg-amber-500/[0.15] dark:bg-amber-950/60 text-amber-800 dark:text-amber-400 border-amber-500/30 dark:border-amber-500/50 cursor-wait"
             : isTerminal || isVoided
-              ? "bg-zinc-100 dark:bg-zinc-900/40 text-zinc-400 dark:text-zinc-600 border-zinc-200 dark:border-zinc-800/40 cursor-not-allowed opacity-40"
-              : "bg-amber-50 dark:bg-amber-500/[0.08] text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-500/20 hover:bg-amber-100 dark:hover:bg-amber-500/[0.15] hover:border-amber-300 dark:hover:border-amber-500/40 active:scale-[0.98]"
+              ? "bg-zinc-500/[0.04] dark:bg-zinc-900/40 text-zinc-400 dark:text-zinc-600 border-zinc-500/[0.15] dark:border-zinc-800/40 cursor-not-allowed opacity-40"
+              : "bg-amber-500/[0.06] dark:bg-amber-500/[0.08] text-amber-700 dark:text-amber-300 border-amber-500/20 dark:border-amber-500/20 hover:bg-amber-500/[0.12] dark:hover:bg-amber-500/[0.15] hover:border-amber-500/40 dark:hover:border-amber-500/40 active:scale-[0.98]"
         }`}
       >
         <span
-          className={`w-1.5 h-1.5 rounded-full ${
+          className={`w-1.5 h-1.5 rounded-full shrink-0 ${
             activeAction === "void"
               ? "bg-amber-500 dark:bg-amber-400 animate-pulse"
               : isVoided
                 ? "bg-zinc-400 dark:bg-zinc-600"
-                : "bg-amber-500 dark:bg-amber-400"
+                : "bg-amber-500 dark:bg-amber-400 opacity-75"
           }`}
         />
         <span>{activeAction === "void" ? "Voiding..." : isVoided ? "Voided" : "Void Escrow"}</span>
@@ -194,21 +194,21 @@ export const ActionCellRenderer: React.FC<ActionCellRendererProps> = (props) => 
           e.stopPropagation();
           executeAction("dispute");
         }}
-        className={`px-2.5 py-1 rounded-md font-medium text-xs border transition-all duration-150 flex items-center gap-1.5 whitespace-nowrap ${
+        className={`rounded-md px-2 py-0.5 font-mono tracking-tight text-[11px] font-medium border transition-all duration-150 flex items-center gap-1.5 whitespace-nowrap ${
           activeAction === "dispute"
-            ? "bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-400 border-rose-300 dark:border-rose-500/50 cursor-wait"
+            ? "bg-rose-500/[0.15] dark:bg-rose-950/60 text-rose-800 dark:text-rose-400 border-rose-500/30 dark:border-rose-500/50 cursor-wait"
             : isTerminal || isDisputed
-              ? "bg-zinc-100 dark:bg-zinc-900/40 text-zinc-400 dark:text-zinc-600 border-zinc-200 dark:border-zinc-800/40 cursor-not-allowed opacity-40"
-              : "bg-rose-50 dark:bg-rose-500/[0.08] text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-500/20 hover:bg-rose-100 dark:hover:bg-rose-500/[0.15] hover:border-rose-300 dark:hover:border-rose-500/40 active:scale-[0.98]"
+              ? "bg-zinc-500/[0.04] dark:bg-zinc-900/40 text-zinc-400 dark:text-zinc-600 border-zinc-500/[0.15] dark:border-zinc-800/40 cursor-not-allowed opacity-40"
+              : "bg-rose-500/[0.06] dark:bg-rose-500/[0.08] text-rose-700 dark:text-rose-300 border-rose-500/20 dark:border-rose-500/20 hover:bg-rose-500/[0.12] dark:hover:bg-rose-500/[0.15] hover:border-rose-500/40 dark:hover:border-rose-500/40 active:scale-[0.98]"
         }`}
       >
         <span
-          className={`w-1.5 h-1.5 rounded-full ${
+          className={`w-1.5 h-1.5 rounded-full shrink-0 ${
             activeAction === "dispute"
               ? "bg-rose-500 dark:bg-rose-400 animate-pulse"
               : isDisputed
                 ? "bg-zinc-400 dark:bg-zinc-600"
-                : "bg-rose-500 dark:bg-rose-400"
+                : "bg-rose-500 dark:bg-rose-400 opacity-75"
           }`}
         />
         <span>
