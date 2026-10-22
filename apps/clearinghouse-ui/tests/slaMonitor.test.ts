@@ -240,5 +240,25 @@ describe("Ticket 11.3: SLA Breach & Delay Warning Engine (slaMonitor)", () => {
       expect(badgeHtml).toContain('data-sla-severity="CRITICAL"');
       expect(badgeHtml).toContain("Merchant dispatch overdue by 24h");
     });
+
+    it("escapes malicious HTML characters in warning messages to prevent XSS injection", () => {
+      const xssWarning = {
+        id: "warn-xss-01",
+        transactionId: "tx-sla-xss",
+        stage: "MERCHANT_DISPATCH" as const,
+        severity: "CRITICAL" as const,
+        message: 'Malicious payload <img src=x onerror=alert(1)> & "quotes"',
+        allocatedDurationHours: 48,
+        actualDurationHours: 72,
+        delayHours: 24,
+        timestamp: "2026-10-21T10:00:00.000Z",
+      };
+
+      const badgeHtml = getWarningBadgeHtml(xssWarning);
+      expect(badgeHtml).not.toContain("<img");
+      expect(badgeHtml).toContain("&lt;img src=x onerror=alert(1)&gt;");
+      expect(badgeHtml).toContain("&amp;");
+      expect(badgeHtml).toContain("&quot;quotes&quot;");
+    });
   });
 });
