@@ -386,17 +386,23 @@ describe("Ticket 11.1: Procurement Task Data Model & State Mapper (ganttDataMapp
       expect(criticalPathIds).toHaveLength(0);
     });
 
-    it("measures actual elapsed duration for completed merchant dispatch when updatedAt is recorded", () => {
-      const recordWithElapsedDispatch: ClearinghouseRecord = {
+    it("does not alter merchant dispatch duration or transit start when updatedAt changes from unrelated updates", () => {
+      const baselineTasks = mapRecordToGanttTasks(mockSampleRecordInTransit);
+      const baselineDispatch = baselineTasks.find((t) => t.stage === "MERCHANT_DISPATCH");
+      const baselineTransit = baselineTasks.find((t) => t.stage === "IN_TRANSIT");
+
+      const recordWithUnrelatedUpdate: ClearinghouseRecord = {
         ...mockSampleRecordInTransit,
-        createdAt: "2026-10-15T00:00:00.000Z",
-        updatedAt: "2026-10-16T12:00:00.000Z", // 36 hours later
+        updatedAt: "2026-10-22T12:00:00.000Z", // Unrelated update days later (e.g. risk score re-eval)
+        riskScore: 88,
       };
 
-      const tasks = mapRecordToGanttTasks(recordWithElapsedDispatch);
-      const dispatchTask = tasks.find((t) => t.stage === "MERCHANT_DISPATCH");
-      // 36 hours total elapsed minus 4.0h spent on prior stages (0.5h mandate + 2.0h catalog + 1.5h escrow) = 32.0h
-      expect(dispatchTask?.duration).toBeCloseTo(32.0, 1);
+      const updatedTasks = mapRecordToGanttTasks(recordWithUnrelatedUpdate);
+      const updatedDispatch = updatedTasks.find((t) => t.stage === "MERCHANT_DISPATCH");
+      const updatedTransit = updatedTasks.find((t) => t.stage === "IN_TRANSIT");
+
+      expect(updatedDispatch?.duration).toBe(baselineDispatch?.duration);
+      expect(updatedTransit?.startDate).toBe(baselineTransit?.startDate);
     });
   });
 });

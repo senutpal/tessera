@@ -175,18 +175,7 @@ export function mapRecordToGanttTasks(
     let actualDurationHours: number;
 
     if (status === "COMPLETED") {
-      let durationHours = def.baselineDurationHours;
-      if (
-        (stage === "MERCHANT_DISPATCH" &&
-          (record.trackingId || record.escrowStatus === "IN_TRANSIT")) ||
-        (stage === "ESCROW_CAPTURED" && record.captureId)
-      ) {
-        const measuredElapsed = (updatedDate.getTime() - actualStart.getTime()) / (3600 * 1000);
-        if (measuredElapsed > 0.05 && measuredElapsed < 10000) {
-          durationHours = Math.round(measuredElapsed * 10) / 10;
-        }
-      }
-      actualDurationHours = durationHours;
+      actualDurationHours = def.baselineDurationHours;
       actualEnd = addHours(actualStart, actualDurationHours);
       currentActualStart = actualEnd;
     } else if (status === "IN_PROGRESS") {
