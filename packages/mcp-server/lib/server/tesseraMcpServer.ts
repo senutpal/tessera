@@ -35,6 +35,9 @@ export interface TesseraMcpServerOptions {
   createEscrowOrderFn?: ((options: CreateEscrowOrderOptions) => Promise<EscrowOrder>) | undefined;
   authorizeOrderFn?: ((options: AuthorizeOrderOptions) => Promise<EscrowAuthorization>) | undefined;
   getOrderFn?: ((orderId: string) => Promise<EscrowOrder>) | undefined;
+  getAuthorizationFn?:
+    | ((authorizationId: string) => Promise<{ id?: string; status: string }>)
+    | undefined;
   getShipmentTrackingFn?:
     | ((txOrTrackerId: string, trackingNumber?: string | undefined) => Promise<ShipmentMilestone>)
     | undefined;
@@ -91,6 +94,7 @@ export class TesseraMcpServer {
       paypalClient: this.options.paypalClient,
       paypalConfig: this.options.paypalConfig,
       getOrderFn: this.options.getOrderFn,
+      getAuthorizationFn: this.options.getAuthorizationFn,
       getShipmentTrackingFn: this.options.getShipmentTrackingFn,
     });
 

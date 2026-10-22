@@ -127,6 +127,36 @@ export class AuthorizationVoidService {
     return result;
   }
 
+  /**
+   * Fetches the current state of an authorization by ID.
+   */
+  public async getAuthorization(authorizationId: string): Promise<{
+    id: string;
+    status: string;
+    amount?: { currency_code: string; value: string } | undefined;
+    rawResponse?: Record<string, unknown> | undefined;
+  }> {
+    if (!authorizationId || !String(authorizationId).trim()) {
+      throw new MandateValidationError("Authorization ID is required to fetch authorization.");
+    }
+    const authIdStr = String(authorizationId).trim();
+    const path = `/v2/payments/authorizations/${encodeURIComponent(authIdStr)}`;
+    const res = await this.authClient.fetchAuthenticated(path, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!res.ok) {
+      await this.handleErrorResponse(res, `Failed to get authorization ${authIdStr}`);
+    }
+    const json = (await res.json()) as Record<string, unknown>;
+    return {
+      id: String(json.id ?? authIdStr),
+      status: String(json.status ?? "UNKNOWN"),
+      amount: json.amount as { currency_code: string; value: string } | undefined,
+      rawResponse: json,
+    };
+  }
+
   private handleErrorResponse(res: Response, defaultMessage: string): Promise<never> {
     return throwPayPalError(
       res,
