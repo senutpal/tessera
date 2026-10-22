@@ -1,0 +1,39 @@
+{
+  "$schema": "https://apimatic.io/schemas/apimatic-config.json",
+  "specification": "./openapi.yaml",
+  "name": "TesseraClearinghouseApi",
+  "title": "Tessera Clearinghouse API",
+  "version": "1.0.0",
+  "description": "APIMatic SDK Configuration and AI Context Plugin metadata for Tessera Clearinghouse API and AP2 Mandate Settlement Engine",
+  "codegen": {
+    "generateInterfaces": true,
+    "exportModels": true,
+    "useAsync": true,
+    "framework": "node",
+    "language": "typescript",
+    "packageVersion": "1.0.0",
+    "nullify404": false,
+    "useModelPrefix": false,
+    "generateDocumentation": true,
+    "symbolFormat": "camelCase",
+    "modelFormat": "pascalCase",
+    "preserveFieldNames": false,
+    "arraySerialization": "indexed"
+  },
+  "platforms": ["ts", "python", "csharp"],
+  "plugins": {
+    "context": {
+      "enabled": true,
+      "includeEndpoints": true,
+      "includeSchemas": true,
+      "includeExamples": true,
+      "aiModelOptimized": true,
+      "systemPromptExtension": "Tessera Clearinghouse automates autonomous agent payments under AP2 protocols, executing PayPal Orders v2 escrow holds, shipment tracking milestone gates, and webhook verification."
+    }
+  },
+  "documentation": {
+    "includeApiExplorer": true,
+    "theme": "dark",
+    "enableCodeSnippets": true
+  }
+}

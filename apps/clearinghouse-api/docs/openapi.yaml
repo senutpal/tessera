@@ -1,0 +1,1110 @@
+openapi: 3.1.0
+info:
+  title: Tessera Clearinghouse API
+  version: 1.0.0
+  description: |
+    Automated Agentic Commerce Clearinghouse and AP2 Mandate Settlement Engine.
+    Coordinates AP2 mandate cryptographic verification, PayPal Orders v2 escrow authorization holds,
+    carrier shipment tracking milestone releases, automated dispute adjudication, and webhook verification.
+  contact:
+    name: Tessera Engineering Team
+    url: https://github.com/paypal/PayPal-TypeScript-Server-SDK
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://127.0.0.1:3000
+    description: Local development & headless test clearinghouse mock server
+  - url: https://api-m.sandbox.paypal.com
+    description: PayPal Developer Sandbox Environment
+  - url: https://api-m.paypal.com
+    description: PayPal Production Live Environment
+
+tags:
+  - name: Authentication
+    description: OAuth2 sandbox and production client credentials token acquisition
+  - name: Mandates
+    description: AP2 (Agent Payments Protocol) checkout and payment mandate verification
+  - name: Orders
+    description: PayPal Orders v2 escrow authorization hold creation and order state
+  - name: Payments
+    description: Milestone escrow capture release and authorization void on SLA breach
+  - name: Shipment Tracking
+    description: PayPal Shipment Tracking v1 milestone queries and carrier status updates
+  - name: Webhooks
+    description: Cryptographic webhook notification verification and event ingestion
+  - name: Disputes
+    description: Customer dispute ingestion, evidence submission, and autonomous resolution
+
+paths:
+  /v1/oauth2/token:
+    post:
+      tags:
+        - Authentication
+      summary: Acquire OAuth2 access token
+      description: |
+        Retrieves a scoped Bearer access token using client credentials grant type.
+        Used for subsequent authenticated requests to Clearinghouse and PayPal APIs.
+      operationId: getOAuth2Token
+      security:
+        - BasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - grant_type
+              properties:
+                grant_type:
+                  type: string
+                  enum:
+                    - client_credentials
+                  default: client_credentials
+                client_id:
+                  type: string
+                  description: PayPal OAuth2 client ID
+                client_secret:
+                  type: string
+                  description: PayPal OAuth2 client secret
+      responses:
+        '200':
+          description: Access token acquired successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuth2TokenResponse'
+        '401':
+          description: Invalid client credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/mandates/verify:
+    post:
+      tags:
+        - Mandates
+      summary: Verify AP2 Mandate
+      description: |
+        Performs cryptographic Ed25519 signature validation, timestamp bounds checking,
+        anti-replay nonce consumption, and SD-JWT binding hash verification for AP2 mandates.
+      operationId: verifyMandate
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MandateVerificationRequest'
+      responses:
+        '200':
+          description: AP2 mandate successfully verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MandateVerificationResponse'
+        '400':
+          description: Mandate schema validation failed or timestamp expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Duplicate mandate nonce detected (replay attack prevention)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v2/checkout/orders:
+    post:
+      tags:
+        - Orders
+      summary: Create Orders v2 Escrow Authorization Hold
+      description: |
+        Creates an order with `intent: "AUTHORIZE"` to lock buyer funds in escrow.
+        Funds remain authorized until carrier proof of delivery confirms milestone capture.
+      operationId: createEscrowOrder
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+      responses:
+        '201':
+          description: Order created with intent AUTHORIZE
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+        '400':
+          description: Invalid purchase unit or amount breakdown
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v2/checkout/orders/{id}:
+    get:
+      tags:
+        - Orders
+      summary: Get order details
+      description: Retrieves the current status, intent, and purchase units of a created order.
+      operationId: getOrder
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Order ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Order details retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+        '404':
+          description: Order not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v2/checkout/orders/{id}/authorize:
+    post:
+      tags:
+        - Orders
+      summary: Authorize payment for approved order
+      description: Authorizes payment on an approved order, placing buyer funds into escrow hold.
+      operationId: authorizeOrder
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Order ID
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Order authorized successfully, returning authorization hold
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderResponse'
+        '400':
+          description: Order cannot be authorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/notifications/verify-webhook-signature:
+    post:
+      tags:
+        - Webhooks
+      summary: Verify PayPal webhook signature
+      description: |
+        Verifies asymmetric RSA signature and CRC32 payload checksum against PayPal's
+        whitelisted X.509 signing certificates to validate incoming notifications.
+      operationId: verifyWebhookSignature
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyWebhookSignatureRequest'
+      responses:
+        '200':
+          description: Webhook signature verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyWebhookSignatureResponse'
+        '400':
+          description: Malformed verification payload or untrusted cert URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/shipping/trackers:
+    get:
+      tags:
+        - Shipment Tracking
+      summary: Query shipment tracking milestone
+      description: |
+        Retrieves real-time carrier delivery milestone status (SHIPPED, IN_TRANSIT, DELIVERED).
+        A status of DELIVERED triggers automated clearinghouse escrow capture release.
+      operationId: getShipmentTrackers
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: transaction_id
+          in: query
+          required: false
+          description: PayPal Order or Authorization transaction ID
+          schema:
+            type: string
+        - name: tracking_number
+          in: query
+          required: false
+          description: Carrier tracking number
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Shipment tracking milestone returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrackerResponse'
+        '404':
+          description: Tracker not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags:
+        - Shipment Tracking
+      summary: Add shipment tracking information
+      description: Registers carrier tracking details for an authorized transaction.
+      operationId: addShipmentTracker
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrackerCreateRequest'
+      responses:
+        '200':
+          description: Tracker registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrackerResponse'
+        '400':
+          description: Malformed tracking payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/shipping/trackers/{id}:
+    get:
+      tags:
+        - Shipment Tracking
+      summary: Get tracker by ID
+      operationId: getTrackerById
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Tracker ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Tracker details retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrackerResponse'
+        '404':
+          description: Tracker not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v2/payments/authorizations/{authorization_id}:
+    get:
+      tags:
+        - Payments
+      summary: Get authorization details
+      operationId: getAuthorization
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: authorization_id
+          in: path
+          required: true
+          description: The PayPal Authorization ID
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Authorization record details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthorizationResponse'
+        '404':
+          description: Authorization not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v2/payments/authorizations/{authorization_id}/capture:
+    post:
+      tags:
+        - Payments
+      summary: Milestone Escrow Capture Release
+      description: |
+        Releases funds from an escrow authorization hold to the merchant.
+        Strictly gated on verified carrier DELIVERED milestone or authenticated supervisor override.
+      operationId: captureEscrow
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: authorization_id
+          in: path
+          required: true
+          description: The authorization hold ID to capture
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureRequest'
+      responses:
+        '201':
+          description: Escrow funds captured and released to merchant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureResponse'
+        '400':
+          description: Invalid capture amount or malformed request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Escrow release rejected (delivery unverified or milestone violation)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v2/payments/authorizations/{authorization_id}/void:
+    post:
+      tags:
+        - Payments
+      summary: Authorization Void on SLA Breach
+      description: |
+        Voids an active authorization hold to release escrowed funds back to the buyer.
+        Executed immediately upon SLA timeout, carrier failure, or supervisor void.
+      operationId: voidAuthorization
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: authorization_id
+          in: path
+          required: true
+          description: The authorization hold ID to void
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  description: Reason for escrow void (e.g. SLA breach)
+      responses:
+        '200':
+          description: Authorization successfully voided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VoidResponse'
+        '204':
+          description: Authorization voided with no content body
+        '400':
+          description: Authorization cannot be voided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/customer/disputes:
+    get:
+      tags:
+        - Disputes
+      summary: List customer disputes
+      description: Queries customer disputes filterable by transaction ID and status.
+      operationId: listDisputes
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: disputed_transaction_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: dispute_state
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Dispute collection returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DisputeSearchResponse'
+
+  /v1/customer/disputes/{id}:
+    get:
+      tags:
+        - Disputes
+      summary: Get customer dispute details
+      operationId: getDispute
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Dispute details returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DisputeResponse'
+
+  /v1/customer/disputes/{id}/accept-claim:
+    post:
+      tags:
+        - Disputes
+      summary: Accept dispute claim and refund buyer
+      description: Autonomously accepts a dispute claim to immediately refund the buyer upon verified non-delivery.
+      operationId: acceptDisputeClaim
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcceptClaimRequest'
+      responses:
+        '200':
+          description: Dispute claim accepted and refund scheduled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubsequentActionResponse'
+
+  /v1/customer/disputes/{id}/escalate:
+    post:
+      tags:
+        - Disputes
+      summary: Escalate dispute to PayPal review
+      description: Escalates dispute to PayPal adjudication when delivery proof is valid but dispute remains unclosed.
+      operationId: escalateDispute
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EscalateDisputeRequest'
+      responses:
+        '200':
+          description: Dispute escalated to PayPal claim
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubsequentActionResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: OAuth2 Bearer token obtained from /v1/oauth2/token
+    BasicAuth:
+      type: http
+      scheme: basic
+      description: Client ID and secret for token endpoint
+    OAuth2:
+      type: oauth2
+      description: PayPal OAuth2 client credentials flow
+      flows:
+        clientCredentials:
+          tokenUrl: /v1/oauth2/token
+          scopes:
+            https://uri.paypal.com/services/payments/orders: Full access to Orders v2 escrow holds
+            https://uri.paypal.com/services/payments/payment: Full access to Payments v2 authorizations and captures
+            https://uri.paypal.com/services/shipping/trackers/readwrite: Full access to Shipment Tracking v1
+
+  schemas:
+    OAuth2TokenResponse:
+      type: object
+      required:
+        - access_token
+        - token_type
+        - expires_in
+      properties:
+        access_token:
+          type: string
+          description: The issued JWT or Bearer access token
+        token_type:
+          type: string
+          example: Bearer
+        expires_in:
+          type: integer
+          example: 32400
+        scope:
+          type: string
+          example: https://uri.paypal.com/services/payments/orders
+
+    AP2Amount:
+      type: object
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          type: integer
+          description: Monetary amount in integer minor units (e.g. 24999 = $249.99)
+          example: 24999
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          example: USD
+
+    AP2Merchant:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          example: merchant_bestbuy_001
+        name:
+          type: string
+          example: Best Buy
+        website:
+          type: string
+          format: uri
+          example: https://www.bestbuy.com
+
+    AP2PaymentInstrument:
+      type: object
+      required:
+        - id
+        - type
+      properties:
+        id:
+          type: string
+          example: inst_pp_balance_01
+        type:
+          type: string
+          example: paypal_balance
+        description:
+          type: string
+          example: PayPal Institutional Settlement Account
+
+    AP2PaymentMandate:
+      type: object
+      required:
+        - vct
+        - transaction_id
+        - payee
+        - payment_amount
+        - payment_instrument
+      properties:
+        vct:
+          type: string
+          enum:
+            - mandate.payment.1
+          default: mandate.payment.1
+        transaction_id:
+          type: string
+          description: Base64url SHA-256 hash binding this payment mandate to the checkout mandate
+          example: mnd_tx_hash_a1b2c3d4
+        payee:
+          $ref: '#/components/schemas/AP2Merchant'
+        payment_amount:
+          $ref: '#/components/schemas/AP2Amount'
+        payment_instrument:
+          $ref: '#/components/schemas/AP2PaymentInstrument'
+        iat:
+          type: integer
+          description: Unix epoch seconds issue timestamp
+          example: 1700000000
+        exp:
+          type: integer
+          description: Unix epoch seconds expiration timestamp
+          example: 1800000000
+        nonce:
+          type: string
+          description: Anti-replay cryptographic nonce
+          example: nonce_ap2_8899aabb
+
+    AP2CheckoutMandate:
+      type: object
+      required:
+        - vct
+        - checkout_jwt
+        - checkout_hash
+      properties:
+        vct:
+          type: string
+          enum:
+            - mandate.checkout.1
+          default: mandate.checkout.1
+        checkout_jwt:
+          type: string
+          description: Raw serialized JWT representing checkout parameters
+        checkout_hash:
+          type: string
+          description: Base64url SHA-256 hash of checkout_jwt
+        iat:
+          type: integer
+          example: 1700000000
+        exp:
+          type: integer
+          example: 1800000000
+        nonce:
+          type: string
+          example: nonce_chk_44556677
+
+    MandateVerificationRequest:
+      type: object
+      required:
+        - mandate
+        - signature
+      properties:
+        mandate:
+          oneOf:
+            - $ref: '#/components/schemas/AP2PaymentMandate'
+            - $ref: '#/components/schemas/AP2CheckoutMandate'
+        signature:
+          type: string
+          description: Base64-encoded Ed25519 digital signature over canonical RFC 8785 JSON
+        signerPublicKey:
+          type: string
+          description: Hex or base64 Ed25519 public key of the signing agent
+
+    MandateVerificationResponse:
+      type: object
+      required:
+        - valid
+        - status
+      properties:
+        valid:
+          type: boolean
+          example: true
+        status:
+          type: string
+          example: VERIFIED
+        mandate_id:
+          type: string
+          example: mnd_987654321
+        vct:
+          type: string
+          example: mandate.payment.1
+        amount:
+          $ref: '#/components/schemas/AP2Amount'
+
+    Money:
+      type: object
+      required:
+        - currency_code
+        - value
+      properties:
+        currency_code:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          example: USD
+        value:
+          type: string
+          example: "249.99"
+
+    PurchaseUnit:
+      type: object
+      required:
+        - amount
+      properties:
+        reference_id:
+          type: string
+          example: tessera-escrow-unit-1
+        amount:
+          $ref: '#/components/schemas/Money'
+        description:
+          type: string
+          example: Channel3 Escrow Hold for AP2 Mandate
+
+    CreateOrderRequest:
+      type: object
+      required:
+        - intent
+        - purchase_units
+      properties:
+        intent:
+          type: string
+          enum:
+            - AUTHORIZE
+          default: AUTHORIZE
+          description: Must be AUTHORIZE for escrow holds
+        purchase_units:
+          type: array
+          items:
+            $ref: '#/components/schemas/PurchaseUnit'
+
+    OrderResponse:
+      type: object
+      required:
+        - id
+        - status
+        - intent
+      properties:
+        id:
+          type: string
+          example: ORD-9876543210
+        status:
+          type: string
+          example: CREATED
+        intent:
+          type: string
+          example: AUTHORIZE
+        authorization_id:
+          type: string
+          example: AUTH-1234567890
+        purchase_units:
+          type: array
+          items:
+            $ref: '#/components/schemas/PurchaseUnit'
+
+    VerifyWebhookSignatureRequest:
+      type: object
+      required:
+        - auth_algo
+        - cert_url
+        - transmission_id
+        - transmission_sig
+        - transmission_time
+        - webhook_id
+        - webhook_event
+      properties:
+        auth_algo:
+          type: string
+          example: SHA256withRSA
+        cert_url:
+          type: string
+          format: uri
+          pattern: '^https://api(\-m)?\.(sandbox\.)?paypal\.com/'
+          example: https://api.sandbox.paypal.com/v1/notifications/certs/CERT-123
+        transmission_id:
+          type: string
+          example: trans-uuid-1234-5678
+        transmission_sig:
+          type: string
+          example: MEUCIQDN2...
+        transmission_time:
+          type: string
+          format: date-time
+          example: 2026-10-22T10:00:00Z
+        webhook_id:
+          type: string
+          example: WH-12345678
+        webhook_event:
+          $ref: '#/components/schemas/WebhookEvent'
+
+    VerifyWebhookSignatureResponse:
+      type: object
+      required:
+        - verification_status
+      properties:
+        verification_status:
+          type: string
+          enum:
+            - SUCCESS
+            - FAILURE
+          example: SUCCESS
+
+    WebhookEvent:
+      type: object
+      required:
+        - id
+        - event_type
+      properties:
+        id:
+          type: string
+          example: WH-EVT-001
+        event_type:
+          type: string
+          example: PAYMENT.AUTHORIZATION.CREATED
+        resource_type:
+          type: string
+          example: authorization
+        summary:
+          type: string
+          example: Authorization hold created
+
+    TrackerResponse:
+      type: object
+      required:
+        - id
+        - status
+      properties:
+        id:
+          type: string
+          example: TRK-9876543210
+        transaction_id:
+          type: string
+          example: ORD-9876543210
+        tracking_number:
+          type: string
+          example: FEDEX-99887766
+        status:
+          type: string
+          enum:
+            - SHIPPED
+            - IN_TRANSIT
+            - DELIVERED
+            - CANCELLED
+            - RETURNED
+          example: DELIVERED
+        carrier:
+          type: string
+          example: FEDEX
+
+    TrackerCreateRequest:
+      type: object
+      required:
+        - transaction_id
+        - tracking_number
+        - carrier
+      properties:
+        transaction_id:
+          type: string
+          example: ORD-9876543210
+        tracking_number:
+          type: string
+          example: FEDEX-99887766
+        carrier:
+          type: string
+          example: FEDEX
+        status:
+          type: string
+          default: SHIPPED
+
+    AuthorizationResponse:
+      type: object
+      required:
+        - id
+        - status
+      properties:
+        id:
+          type: string
+          example: AUTH-1234567890
+        status:
+          type: string
+          enum:
+            - CREATED
+            - CAPTURED
+            - DENIED
+            - PARTIALLY_CAPTURED
+            - VOIDED
+            - PENDING
+          example: CREATED
+        amount:
+          $ref: '#/components/schemas/Money'
+
+    CaptureRequest:
+      type: object
+      properties:
+        amount:
+          $ref: '#/components/schemas/Money'
+        final_capture:
+          type: boolean
+          default: true
+        note_to_payer:
+          type: string
+          example: Milestone delivery verified - escrow release
+
+    CaptureResponse:
+      type: object
+      required:
+        - id
+        - status
+      properties:
+        id:
+          type: string
+          example: CAP-1234567890
+        status:
+          type: string
+          enum:
+            - COMPLETED
+            - PENDING
+          example: COMPLETED
+        amount:
+          $ref: '#/components/schemas/Money'
+        final_capture:
+          type: boolean
+          example: true
+
+    VoidResponse:
+      type: object
+      required:
+        - id
+        - status
+      properties:
+        id:
+          type: string
+          example: AUTH-1234567890
+        status:
+          type: string
+          enum:
+            - VOIDED
+          example: VOIDED
+
+    DisputeResponse:
+      type: object
+      required:
+        - dispute_id
+        - status
+      properties:
+        dispute_id:
+          type: string
+          example: DP-123456789
+        status:
+          type: string
+          example: OPEN
+        dispute_amount:
+          $ref: '#/components/schemas/Money'
+        disputed_transactions:
+          type: array
+          items:
+            type: object
+            properties:
+              seller_transaction_id:
+                type: string
+                example: ORD-9876543210
+
+    DisputeSearchResponse:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DisputeResponse'
+
+    AcceptClaimRequest:
+      type: object
+      required:
+        - accept_claim_type
+      properties:
+        accept_claim_type:
+          type: string
+          enum:
+            - REFUND
+          default: REFUND
+        note:
+          type: string
+          example: Autonomous claim accepted due to verified non-delivery
+
+    EscalateDisputeRequest:
+      type: object
+      required:
+        - note
+      properties:
+        note:
+          type: string
+          example: Delivery confirmed by carrier SLA, escalating to PayPal review
+
+    SubsequentActionResponse:
+      type: object
+      required:
+        - acknowledged
+      properties:
+        acknowledged:
+          type: boolean
+          example: true
+
+    ErrorDetail:
+      type: object
+      required:
+        - issue
+        - description
+      properties:
+        field:
+          type: string
+          example: purchase_units[0].amount.value
+        issue:
+          type: string
+          example: INVALID_PARAMETER_VALUE
+        description:
+          type: string
+          example: The amount must be greater than zero
+
+    ErrorResponse:
+      type: object
+      required:
+        - name
+        - message
+      properties:
+        name:
+          type: string
+          example: VALIDATION_ERROR
+        message:
+          type: string
+          example: The requested action could not be performed due to invalid inputs
+        debug_id:
+          type: string
+          example: dbg_778899aabb
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
