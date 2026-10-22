@@ -128,7 +128,8 @@ export interface AgentProcurementResult {
   error?: string | undefined;
 }
 
-function cleanDomain(raw: string): string {
+function cleanDomain(raw?: string | null): string {
+  if (!raw || typeof raw !== "string") return "";
   const stripped = raw
     .replace(/^https?:\/\//i, "")
     .split("/")[0]
@@ -395,6 +396,11 @@ export async function runAgentProcurementLoop(
           const intervalMs = options.approvalPollIntervalMs ?? 100;
           const startTime = Date.now();
           while (currentOrder.status !== "APPROVED") {
+            if (currentOrder.status === "VOIDED" || currentOrder.status === "COMPLETED") {
+              throw new Error(
+                `PayPal order ${escrowOrder.orderId} entered terminal status ${currentOrder.status} before buyer approval.`,
+              );
+            }
             if (Date.now() - startTime >= maxWaitMs) {
               throw new Error(
                 `PayPal order ${escrowOrder.orderId} was not approved by buyer within timeout (${maxWaitMs}ms). Current status: ${currentOrder.status}`,
@@ -513,6 +519,7 @@ export async function runAgentProcurementLoop(
       transactionId: captureTxId,
       milestone: {
         ...milestone,
+        transactionId: captureTxId,
       },
       amount: orderAmount,
       finalCapture: true,

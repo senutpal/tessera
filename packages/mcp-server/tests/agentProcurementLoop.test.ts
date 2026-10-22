@@ -8,7 +8,14 @@ import {
   ShipmentMilestoneStatus,
 } from "@tessera/core";
 import { generateEd25519KeyPair } from "@tessera/mandates";
-import type { PayPalCaptureResponse, PayPalOrderResponse } from "@tessera/paypal";
+import type {
+  AuthorizeOrderOptions,
+  CreateEscrowOrderOptions,
+  PayPalCaptureResponse,
+  PayPalClient,
+  PayPalOrderResponse,
+  ShipmentMilestone,
+} from "@tessera/paypal";
 import { PolicyEngine } from "@tessera/policy";
 import { describe, expect, it } from "vitest";
 import { runAgentProcurementLoop } from "../index.js";
@@ -616,14 +623,14 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
     const fakePaymentSource = { vault_id: "vault-token-123" };
 
     const mockPayPalClient = {
-      createEscrowOrder: async (opts: any) => ({
+      createEscrowOrder: async (opts: CreateEscrowOrderOptions) => ({
         orderId: asOrderId("ORDER-PS-01"),
         status: "CREATED",
         amount: opts.amount,
         links: [],
         rawResponse: createMockOrderResponse("ORDER-PS-01"),
       }),
-      authorizeOrder: async (opts: any) => {
+      authorizeOrder: async (opts: AuthorizeOrderOptions) => {
         passedPaymentSource = opts.paymentSource;
         return {
           authorizationId: asAuthorizationId("AUTH-PS-01"),
@@ -660,7 +667,7 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
       maxPrice: 50.0,
       buyerKeyPair,
       paymentSource: fakePaymentSource,
-      paypalClient: mockPayPalClient as any,
+      paypalClient: mockPayPalClient as unknown as PayPalClient,
       simulateCarrierDelivery: true,
       searchCatalogFn: async () => createMockCatalogResponse(mockProducts),
     });
@@ -682,7 +689,7 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
 
     let pollCount = 0;
     const mockPayPalClient = {
-      createEscrowOrder: async (opts: any) => ({
+      createEscrowOrder: async (opts: CreateEscrowOrderOptions) => ({
         orderId: asOrderId("ORDER-POLL-01"),
         status: "CREATED",
         amount: opts.amount,
@@ -699,7 +706,7 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
           rawResponse: createMockOrderResponse("ORDER-POLL-01"),
         };
       },
-      authorizeOrder: async (opts: any) => ({
+      authorizeOrder: async (opts: AuthorizeOrderOptions) => ({
         authorizationId: asAuthorizationId("AUTH-POLL-01"),
         orderId: opts.orderId,
         status: "CREATED",
@@ -732,7 +739,7 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
       query: "item",
       maxPrice: 50.0,
       buyerKeyPair,
-      paypalClient: mockPayPalClient as any,
+      paypalClient: mockPayPalClient as unknown as PayPalClient,
       approvalPollIntervalMs: 10,
       approvalTimeoutMs: 1000,
       simulateCarrierDelivery: true,
@@ -756,14 +763,14 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
 
     let captureEscrowCalled = false;
     const mockPayPalClient = {
-      createEscrowOrder: async (opts: any) => ({
+      createEscrowOrder: async (opts: CreateEscrowOrderOptions) => ({
         orderId: asOrderId("ORDER-TF-01"),
         status: "APPROVED" as const,
         amount: opts.amount,
         links: [],
         rawResponse: createMockOrderResponse("ORDER-TF-01"),
       }),
-      authorizeOrder: async (opts: any) => ({
+      authorizeOrder: async (opts: AuthorizeOrderOptions) => ({
         authorizationId: asAuthorizationId("AUTH-TF-01"),
         orderId: opts.orderId,
         status: "CREATED",
@@ -783,7 +790,7 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
       query: "item",
       maxPrice: 50.0,
       buyerKeyPair,
-      paypalClient: mockPayPalClient as any,
+      paypalClient: mockPayPalClient as unknown as PayPalClient,
       simulateCarrierDelivery: true, // Even with simulateCarrierDelivery, real tracker error MUST propagate
       searchCatalogFn: async () => createMockCatalogResponse(mockProducts),
     });
@@ -861,5 +868,128 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
     expect(result.success).toBe(true);
     expect(captureTxIdReceived).toBe("TRACKER-TRANSACTION-999");
     expect(milestoneTxIdReceived).toBe("TRACKER-TRANSACTION-999");
+  });
+
+  it("fails fast when polled order enters VOIDED status before approval without waiting for timeout", async () => {
+    const buyerKeyPair = generateEd25519KeyPair();
+    const mockProducts = [
+      {
+        id: "item-void-poll",
+        title: "Void Poll Item",
+        domain: "staples.com",
+        price: 20.0,
+      },
+    ];
+
+    const mockPayPalClient = {
+      createEscrowOrder: async (opts: CreateEscrowOrderOptions) => ({
+        orderId: asOrderId("ORDER-VOID-POLL"),
+        status: "CREATED",
+        amount: opts.amount,
+        links: [],
+        rawResponse: createMockOrderResponse("ORDER-VOID-POLL"),
+      }),
+      getOrder: async () => ({
+        orderId: asOrderId("ORDER-VOID-POLL"),
+        status: "VOIDED" as const,
+        amount: Money.fromDecimalString("20.00", "USD"),
+        links: [],
+        rawResponse: createMockOrderResponse("ORDER-VOID-POLL"),
+      }),
+      authorizeOrder: async () => {
+        throw new Error("Must not be called");
+      },
+      getShipmentTracking: async () => {
+        throw new Error("Must not be called");
+      },
+      captureEscrow: async () => {
+        throw new Error("Must not be called");
+      },
+    };
+
+    const startTime = Date.now();
+    const result = await runAgentProcurementLoop({
+      query: "item",
+      maxPrice: 50.0,
+      buyerKeyPair,
+      paypalClient: mockPayPalClient as unknown as PayPalClient,
+      approvalPollIntervalMs: 50,
+      approvalTimeoutMs: 10000, // Long timeout: test must fail fast, not wait 10s
+      searchCatalogFn: async () => createMockCatalogResponse(mockProducts),
+    });
+
+    const elapsedMs = Date.now() - startTime;
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("terminal status VOIDED");
+    expect(elapsedMs).toBeLessThan(2000);
+  });
+
+  it("synchronizes transactionId on milestone when tracker milestone omits transactionId so capture succeeds", async () => {
+    const buyerKeyPair = generateEd25519KeyPair();
+    const mockProducts = [
+      {
+        id: "item-no-txid",
+        title: "No TxId Item",
+        domain: "staples.com",
+        price: 40.0,
+      },
+    ];
+
+    let passedOptsTxId: string | undefined;
+    let passedMilestoneTxId: string | undefined;
+
+    const result = await runAgentProcurementLoop({
+      query: "item",
+      maxPrice: 50.0,
+      buyerKeyPair,
+      searchCatalogFn: async () => createMockCatalogResponse(mockProducts),
+      createEscrowOrderFn: async (opts) => ({
+        orderId: asOrderId("ORDER-NOTXID-01"),
+        status: "CREATED",
+        amount:
+          opts.amount instanceof Money
+            ? opts.amount
+            : Money.fromDecimalString(opts.amount.value, opts.amount.currency_code),
+        links: [],
+        rawResponse: createMockOrderResponse("ORDER-NOTXID-01"),
+      }),
+      authorizeOrderFn: async (opts) => ({
+        authorizationId: asAuthorizationId("AUTH-NOTXID-01"),
+        orderId: asOrderId(String(opts.orderId)),
+        status: "CREATED",
+        amount: Money.fromDecimalString("40.00", "USD"),
+        rawResponse: createMockOrderResponse(String(opts.orderId)),
+      }),
+      getShipmentTrackingFn: async (_authId, trackNum) =>
+        ({
+          // Omit transactionId intentionally:
+          trackingNumber: trackNum ?? "TRACK-NOTXID",
+          carrier: "UPS",
+          status: ShipmentMilestoneStatus.DELIVERED,
+          rawStatus: "DELIVERED",
+          trackingNumberValidated: true,
+        }) as unknown as ShipmentMilestone,
+      captureEscrowFn: async (opts) => {
+        passedOptsTxId = String(opts.transactionId);
+        passedMilestoneTxId = String(opts.milestone?.transactionId);
+        return {
+          authorizationId: asAuthorizationId("AUTH-NOTXID-01"),
+          captureId: asCaptureId("CAP-NOTXID-01"),
+          status: "COMPLETED",
+          amount: Money.fromDecimalString("40.00", "USD"),
+          finalCapture: true,
+          capturedAt: new Date().toISOString(),
+          requestId: "req-notxid",
+          releaseTrigger: "CARRIER_DELIVERY_PROOF",
+          clearinghouseState: ClearinghouseState.SETTLED,
+          rawResponse: createMockCaptureResponse("CAP-NOTXID-01"),
+        };
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(passedOptsTxId).toBeTruthy();
+    expect(passedMilestoneTxId).toBeTruthy();
+    expect(passedOptsTxId).toBe(passedMilestoneTxId);
   });
 });

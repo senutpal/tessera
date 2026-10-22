@@ -7,7 +7,8 @@ import {
 } from "@tessera/channel3";
 import { z } from "zod";
 
-function cleanDomain(raw: string): string {
+function cleanDomain(raw?: string | null): string {
+  if (!raw || typeof raw !== "string") return "";
   const stripped = raw
     .replace(/^https?:\/\//i, "")
     .split("/")[0]
