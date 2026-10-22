@@ -287,9 +287,13 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
                     duration?: number;
                   };
                 }) => {
+                  const esc = (v: unknown) =>
+                    String(v ?? "").replace(/[&<>"']/g, (c) =>
+                      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string,
+                    );
                   return `<div class="p-2 font-mono text-xs">
-                    <div class="font-bold">${taskRecord.name || ""}</div>
-                    <div>Status: ${taskRecord.status || ""}</div>
+                    <div class="font-bold">${esc(taskRecord.name)}</div>
+                    <div>Status: ${esc(taskRecord.status)}</div>
                     <div>Duration: ${taskRecord.duration || 0}h</div>
                   </div>`;
                 },
