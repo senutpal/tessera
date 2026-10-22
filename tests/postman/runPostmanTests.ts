@@ -28,6 +28,8 @@ export interface MockServerInstance {
  */
 export function createMockServer(port = 0): Promise<MockServerInstance> {
   return new Promise((resolve, reject) => {
+    let issuedAccessToken: string | undefined;
+
     const server = http.createServer((req, res) => {
       const pathname = new URL(req.url || "/", "http://127.0.0.1").pathname;
       const method = req.method?.toUpperCase() || "GET";
@@ -48,13 +50,41 @@ export function createMockServer(port = 0): Promise<MockServerInstance> {
 
       // 1. OAuth2 Token Acquisition
       if (method === "POST" && pathname === "/v1/oauth2/token") {
+        const accessToken = `mock_jwt_access_token_${Date.now()}`;
+        issuedAccessToken = accessToken;
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
-            access_token: `mock_jwt_access_token_${Date.now()}`,
+            access_token: accessToken,
             token_type: "Bearer",
             expires_in: 32400,
             scope: "https://uri.paypal.com/services/payments/orders",
+          }),
+        );
+        return;
+      }
+
+      const isProtectedRoute =
+        (method === "POST" &&
+          [
+            "/api/v1/mandates/verify",
+            "/v2/checkout/orders",
+            "/v1/notifications/verify-webhook-signature",
+          ].includes(pathname)) ||
+        (method === "GET" && pathname === "/v1/shipping/trackers") ||
+        (method === "POST" &&
+          (/^\/v2\/payments\/authorizations\/[^/]+\/capture$/.test(pathname) ||
+            /^\/v2\/payments\/authorizations\/[^/]+\/void$/.test(pathname)));
+
+      if (
+        isProtectedRoute &&
+        (!issuedAccessToken || req.headers.authorization !== `Bearer ${issuedAccessToken}`)
+      ) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            name: "AUTHENTICATION_ERROR",
+            message: "Missing or invalid Bearer access token",
           }),
         );
         return;
