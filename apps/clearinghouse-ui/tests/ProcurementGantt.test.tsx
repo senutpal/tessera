@@ -96,7 +96,21 @@ describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (Procurement
     });
 
     it("escapes malicious task name, status, and duration in Bryntum taskTooltip template", () => {
-      let capturedConfig: any;
+      let capturedConfig:
+        | {
+            features?: {
+              taskTooltip?: {
+                template?: (data: {
+                  taskRecord: {
+                    name?: string;
+                    status?: string;
+                    duration?: number;
+                  };
+                }) => string;
+              };
+            };
+          }
+        | undefined;
       const factory = vi.fn().mockImplementation((config) => {
         capturedConfig = config;
         return {
@@ -108,13 +122,15 @@ describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (Procurement
       render(<ProcurementGantt records={[mockRecord1]} ganttInstanceFactory={factory} />);
 
       expect(capturedConfig?.features?.taskTooltip?.template).toBeDefined();
-      const template = capturedConfig.features.taskTooltip.template;
+      const template = capturedConfig?.features?.taskTooltip?.template;
+      expect(template).toBeDefined();
+      if (!template) throw new Error("taskTooltip template was not defined");
 
       const maliciousHtml = template({
         taskRecord: {
           name: '<script>alert("xss")</script>',
-          status: '<img src=x onerror=alert(1)>',
-          duration: '<svg/onload=alert(2)>' as unknown as number,
+          status: "<img src=x onerror=alert(1)>",
+          duration: "<svg/onload=alert(2)>" as unknown as number,
         },
       });
 
@@ -349,7 +365,8 @@ describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (Procurement
       );
 
       expect(mockLoadInlineData).toHaveBeenCalled();
-      const lastCallArgs = mockLoadInlineData.mock.calls[mockLoadInlineData.mock.calls.length - 1][0];
+      const lastCallArgs =
+        mockLoadInlineData.mock.calls[mockLoadInlineData.mock.calls.length - 1][0];
       expect(lastCallArgs.tasksData).toBeDefined();
       expect(lastCallArgs.dependenciesData).toBeDefined();
 

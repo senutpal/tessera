@@ -147,10 +147,8 @@ export const App: React.FC = () => {
     }
   }, [recalculateStats]);
 
-  const recordsList = useMemo(
-    () => Array.from(recordsRef.current.values()),
-    [recordsVersion],
-  );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recordsVersion is a state counter triggering re-evaluation of recordsRef.current
+  const recordsList = useMemo(() => Array.from(recordsRef.current.values()), [recordsVersion]);
 
   const defaultWsUrl =
     typeof window !== "undefined" && window.location.host

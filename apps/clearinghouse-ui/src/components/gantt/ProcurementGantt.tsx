@@ -125,7 +125,7 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
 
     const effectiveRefDate = useMemo(() => {
       return referenceDate ? new Date(referenceDate) : new Date();
-    }, [referenceDate, records]);
+    }, [referenceDate]);
 
     // Filter records if a specific transaction is isolated
     const filteredRecords = useMemo(() => {
@@ -306,8 +306,12 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
                   };
                 }) => {
                   const esc = (v: unknown) =>
-                    String(v ?? "").replace(/[&<>"']/g, (c) =>
-                      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string,
+                    String(v ?? "").replace(
+                      /[&<>"']/g,
+                      (c) =>
+                        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+                          c
+                        ] as string,
                     );
                   return `<div class="p-2 font-mono text-xs">
                     <div class="font-bold">${esc(taskRecord.name)}</div>
