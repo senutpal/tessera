@@ -31,12 +31,26 @@ export const SubmitMandateInputShape = {
         .string()
         .min(1, "Signature cannot be empty")
         .describe("Ed25519 signature over canonical mandate payload"),
-      signerPublicKey: z
+      signerPublicKey: z.string().optional().describe("Signer Ed25519 public key"),
+      signer_public_key: z
         .string()
-        .min(1, "signerPublicKey cannot be empty")
-        .describe("Signer Ed25519 public key"),
+        .optional()
+        .describe("Alternative snake_case public key parameter"),
+      public_key: z.string().optional().describe("Alternative public key parameter"),
     })
     .describe("Cryptographically signed AP2 mandate container"),
+  amount: z
+    .number()
+    .positive("amount must be positive")
+    .optional()
+    .describe("Required monetary amount for non-payment mandates (e.g. checkout mandates)"),
+  currency: z
+    .string()
+    .length(3, "Currency must be 3-letter ISO code")
+    .default("USD")
+    .optional()
+    .describe("ISO 4217 currency code (default: USD)"),
+  agent_id: z.string().optional().describe("Calling agent identifier for spend policy evaluation"),
   merchant_id: z.string().optional().describe("Payee or merchant identifier"),
   description: z.string().optional().describe("Escrow order description"),
   custom_id: z.string().optional().describe("Tracking or correlation ID"),
@@ -62,15 +76,36 @@ export function registerSubmitMandateTool(server: McpServer, context: SubmitMand
     async (args) => {
       try {
         const signed = args.signed_mandate;
+        const resolvedPublicKey =
+          signed.signerPublicKey ?? signed.signer_public_key ?? signed.public_key;
+
+        if (!resolvedPublicKey) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text: "Mandate cryptographic verification failed: Signer public key is missing from signed_mandate container.",
+              },
+            ],
+          };
+        }
 
         // 1. Cryptographically verify AP2 mandate (Ed25519 signature + timestamps + anti-replay)
         let verifiedMandate: unknown;
         try {
           const verifOptions: MandateVerificationOptions = {
-            publicKey: signed.signerPublicKey,
+            publicKey: resolvedPublicKey,
             ...(context.nonceStore !== undefined ? { nonceStore: context.nonceStore } : {}),
           };
-          verifiedMandate = await verifyMandate(signed as SignedMandate<unknown>, verifOptions);
+          verifiedMandate = await verifyMandate(
+            {
+              mandate: signed.mandate,
+              signature: signed.signature,
+              signerPublicKey: resolvedPublicKey,
+            } as SignedMandate<unknown>,
+            verifOptions,
+          );
         } catch (verifErr) {
           const msg = verifErr instanceof Error ? verifErr.message : String(verifErr);
           return {
@@ -90,13 +125,16 @@ export function registerSubmitMandateTool(server: McpServer, context: SubmitMand
           verifiedMandate !== null &&
           (verifiedMandate as { vct?: unknown }).vct === "mandate.payment.1";
 
+        const effectiveAgentId =
+          args.agent_id ??
+          (typeof (signed.mandate as { agent_id?: unknown }).agent_id === "string"
+            ? (signed.mandate as { agent_id: string }).agent_id
+            : "agent-mcp-orchestrator");
+
         if (context.policyEngine && isPaymentMandate) {
           const paymentMandate = verifiedMandate as PaymentMandate;
           const policyEval = context.policyEngine.evaluateSafe({
-            agentId:
-              typeof (signed.mandate as { agent_id?: unknown }).agent_id === "string"
-                ? (signed.mandate as { agent_id: string }).agent_id
-                : "agent-mcp-orchestrator",
+            agentId: effectiveAgentId,
             mandate: paymentMandate,
           });
 
@@ -131,8 +169,27 @@ export function registerSubmitMandateTool(server: McpServer, context: SubmitMand
           if (!customId && pm.transaction_id) {
             customId = pm.transaction_id;
           }
+        } else if (args.amount !== undefined) {
+          money = Money.fromDecimalString(
+            args.amount.toFixed(2),
+            (args.currency ?? "USD").toUpperCase(),
+          );
+          if (
+            !customId &&
+            typeof (verifiedMandate as { checkout_hash?: unknown }).checkout_hash === "string"
+          ) {
+            customId = (verifiedMandate as { checkout_hash: string }).checkout_hash;
+          }
         } else {
-          money = Money.fromDecimalString("1.00", "USD");
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text: "Mandate does not include payment_amount, and no explicit `amount` parameter was provided.",
+              },
+            ],
+          };
         }
 
         // 4. Create and authorize PayPal escrow order (intent: AUTHORIZE)
@@ -189,7 +246,9 @@ export function registerSubmitMandateTool(server: McpServer, context: SubmitMand
         const status = authorization?.status ?? escrowOrder.status;
 
         const summaryLines = [
-          "## AP2 Mandate Authorization Succeeded",
+          authId
+            ? "## AP2 Mandate Authorization Succeeded"
+            : "## AP2 Mandate Verified & Escrow Order Created",
           `- **Order ID:** ${escrowOrder.orderId}`,
           authId ? `- **Authorization ID:** ${authId}` : "- **Authorization ID:** Pending approval",
           `- **Status:** ${status}`,

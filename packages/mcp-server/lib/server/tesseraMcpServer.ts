@@ -1,4 +1,4 @@
-import type { ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -40,16 +40,26 @@ export interface TesseraMcpServerOptions {
     | undefined;
 }
 
+interface SseSession {
+  transport: SSEServerTransport;
+  server: McpServer;
+}
+
 export class TesseraMcpServer {
   private readonly mcpServer: McpServer;
   private readonly options: TesseraMcpServerOptions;
+  private readonly sseSessions = new Map<string, SseSession>();
 
   constructor(options: TesseraMcpServerOptions = {}) {
     this.options = options;
-    this.mcpServer = new McpServer(
+    this.mcpServer = this.createMcpServerInstance();
+  }
+
+  private createMcpServerInstance(): McpServer {
+    const server = new McpServer(
       {
-        name: options.name ?? "tessera-clearinghouse",
-        version: options.version ?? "0.1.0",
+        name: this.options.name ?? "tessera-clearinghouse",
+        version: this.options.version ?? "0.1.0",
       },
       {
         capabilities: {
@@ -63,16 +73,12 @@ export class TesseraMcpServer {
       },
     );
 
-    this.registerTools();
-  }
-
-  private registerTools(): void {
-    registerSearchCatalogTool(this.mcpServer, {
+    registerSearchCatalogTool(server, {
       channel3Client: this.options.channel3Client,
       searchProductsFn: this.options.searchProductsFn,
     });
 
-    registerSubmitMandateTool(this.mcpServer, {
+    registerSubmitMandateTool(server, {
       paypalClient: this.options.paypalClient,
       paypalConfig: this.options.paypalConfig,
       policyEngine: this.options.policyEngine,
@@ -81,16 +87,18 @@ export class TesseraMcpServer {
       authorizeOrderFn: this.options.authorizeOrderFn,
     });
 
-    registerCheckSettlementTool(this.mcpServer, {
+    registerCheckSettlementTool(server, {
       paypalClient: this.options.paypalClient,
       paypalConfig: this.options.paypalConfig,
       getOrderFn: this.options.getOrderFn,
       getShipmentTrackingFn: this.options.getShipmentTrackingFn,
     });
+
+    return server;
   }
 
   /**
-   * Connects the MCP server to a given transport.
+   * Connects the main MCP server to a given transport (e.g. In-Memory or Stdio).
    */
   public async connect(transport: Transport): Promise<void> {
     await this.mcpServer.connect(transport);
@@ -105,21 +113,70 @@ export class TesseraMcpServer {
   }
 
   /**
-   * Creates an SSE server transport and connects it (for browser/web agents).
+   * Creates an SSE server transport and connects a dedicated protocol instance to it (for browser/web agents).
    */
   public async createSseTransport(
     endpoint: string,
     res: ServerResponse,
   ): Promise<SSEServerTransport> {
     const transport = new SSEServerTransport(endpoint, res);
-    await this.connect(transport);
+    const sessionServer = this.createMcpServerInstance();
+    await sessionServer.connect(transport);
+    const sessionId = transport.sessionId;
+    this.sseSessions.set(sessionId, { transport, server: sessionServer });
+
+    res.on("close", () => {
+      this.sseSessions.delete(sessionId);
+      sessionServer.close().catch(() => {});
+    });
+
     return transport;
   }
 
   /**
-   * Closes the MCP server and disconnects any active transports.
+   * Retrieves an active SSEServerTransport by session ID.
+   */
+  public getSseTransport(sessionId: string): SSEServerTransport | undefined {
+    return this.sseSessions.get(sessionId)?.transport;
+  }
+
+  /**
+   * Routes an incoming HTTP POST message to the matching SSE session transport.
+   */
+  public async handleSsePostMessage(
+    sessionId: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+    parsedBody?: unknown,
+  ): Promise<boolean> {
+    const session = this.sseSessions.get(sessionId);
+    if (!session) {
+      res.writeHead(404).end(`Session not found: ${sessionId}`);
+      return false;
+    }
+    await session.transport.handlePostMessage(req, res, parsedBody);
+    return true;
+  }
+
+  /**
+   * Returns count of active SSE client sessions.
+   */
+  public get activeSseSessionCount(): number {
+    return this.sseSessions.size;
+  }
+
+  /**
+   * Closes the MCP server and disconnects any active transports and SSE sessions.
    */
   public async close(): Promise<void> {
+    for (const session of this.sseSessions.values()) {
+      try {
+        await session.server.close();
+      } catch {
+        // ignore individual session close errors
+      }
+    }
+    this.sseSessions.clear();
     await this.mcpServer.close();
   }
 

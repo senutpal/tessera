@@ -7,9 +7,20 @@ import {
 } from "@tessera/channel3";
 import { z } from "zod";
 
+function cleanDomain(raw: string): string {
+  const stripped = raw
+    .replace(/^https?:\/\//i, "")
+    .split("/")[0]
+    .split(":")[0]
+    .trim()
+    .toLowerCase();
+  return stripped.startsWith("www.") ? stripped.slice(4) : stripped;
+}
+
 export const SearchCatalogInputShape = {
   query: z
     .string()
+    .trim()
     .min(1, "Search query is required")
     .describe("Product search keywords or product description, e.g. 'mechanical keyboard'"),
   max_price: z
@@ -27,6 +38,7 @@ export const SearchCatalogInputShape = {
     .array(z.string())
     .optional()
     .describe("Optional whitelist of merchant domains (e.g. ['bestbuy.com', 'amazon.com'])"),
+  in_stock_only: z.boolean().optional().describe("Filter only currently in-stock merchant offers"),
   limit: z
     .number()
     .int()
@@ -67,14 +79,19 @@ export function registerSearchCatalogTool(server: McpServer, context: SearchCata
         const wirePayload = rawResults as SearchProductsResultWire | ProductSummaryWire[];
         const normalizedProducts = normalizeSearchResults(wirePayload);
         const maxPrice = args.max_price;
-        const allowedDomains = args.allowed_domains?.map((d) => d.toLowerCase().trim());
+        const allowedDomains = args.allowed_domains?.map(cleanDomain).filter(Boolean);
         const targetCurrency = (args.currency ?? "USD").toUpperCase();
+        const inStockOnly = args.in_stock_only ?? false;
 
         const filtered = normalizedProducts
           .map((prod) => {
             const validOffers = prod.offers.filter((offer) => {
+              if (inStockOnly && !offer.inStock) {
+                return false;
+              }
+
               if (allowedDomains && allowedDomains.length > 0) {
-                const domain = offer.merchantDomain.toLowerCase();
+                const domain = cleanDomain(offer.merchantDomain);
                 const matched = allowedDomains.some(
                   (d) => domain === d || domain.endsWith(`.${d}`),
                 );
@@ -93,12 +110,21 @@ export function registerSearchCatalogTool(server: McpServer, context: SearchCata
               return true;
             });
 
+            validOffers.sort((a, b) => a.price.amount - b.price.amount);
+
             return {
               ...prod,
               offers: validOffers,
             };
           })
           .filter((prod) => prod.offers.length > 0);
+
+        filtered.sort((a, b) => {
+          const firstOfferA = a.offers[0];
+          const firstOfferB = b.offers[0];
+          if (!firstOfferA || !firstOfferB) return 0;
+          return firstOfferA.price.amount - firstOfferB.price.amount;
+        });
 
         const limitedProducts = filtered.slice(0, args.limit ?? 5);
 

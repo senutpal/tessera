@@ -84,12 +84,25 @@ export interface AgentProcurementResult {
   error?: string | undefined;
 }
 
+function cleanDomain(raw: string): string {
+  const stripped = raw
+    .replace(/^https?:\/\//i, "")
+    .split("/")[0]
+    .split(":")[0]
+    .trim()
+    .toLowerCase();
+  return stripped.startsWith("www.") ? stripped.slice(4) : stripped;
+}
+
 export async function runAgentProcurementLoop(
   options: AgentProcurementOptions,
 ): Promise<AgentProcurementResult> {
   const steps: ProcurementStepAudit[] = [];
   const targetCurrency = (options.currency ?? "USD").toUpperCase();
   const agentId = options.agentId ?? "agent-autonomous-procurement";
+
+  let createdOrderId: string | undefined;
+  let createdAuthId: string | undefined;
 
   const recordStep = (
     step: ProcurementStepName,
@@ -105,6 +118,29 @@ export async function runAgentProcurementLoop(
       ...(error !== undefined ? { error } : {}),
     });
   };
+
+  // 0. Input validation
+  if (!options.query?.trim()) {
+    const msg = "Product search query cannot be empty";
+    recordStep("DISCOVER", "FAILED", undefined, msg);
+    return { success: false, steps, error: msg };
+  }
+
+  if (
+    typeof options.maxPrice !== "number" ||
+    options.maxPrice <= 0 ||
+    !Number.isFinite(options.maxPrice)
+  ) {
+    const msg = "maxPrice must be a positive finite number";
+    recordStep("DISCOVER", "FAILED", undefined, msg);
+    return { success: false, steps, error: msg };
+  }
+
+  if (!options.buyerKeyPair?.privateKey || !options.buyerKeyPair?.publicKey) {
+    const msg = "Valid buyer Ed25519 keypair is required";
+    recordStep("MANDATE_SIGN", "FAILED", undefined, msg);
+    return { success: false, steps, error: msg };
+  }
 
   try {
     // -------------------------------------------------------------
@@ -125,15 +161,18 @@ export async function runAgentProcurementLoop(
       return { success: false, steps, error: msg };
     }
 
-    // Filter offers by allowedDomains, currency, and maxPrice
-    const allowed = options.allowedDomains?.map((d) => d.toLowerCase().trim());
+    // Filter offers by allowedDomains, currency, maxPrice, and inStock
+    const allowed = options.allowedDomains?.map(cleanDomain).filter(Boolean);
     let selectedProduct: ProcurementProduct | undefined;
     let selectedOffer: ProcurementProduct["offers"][0] | undefined;
 
     for (const prod of normalizedProducts) {
       for (const off of prod.offers) {
+        // Enforce inventory availability for autonomous checkout
+        if (!off.inStock) continue;
+
         if (allowed && allowed.length > 0) {
-          const dom = off.merchantDomain.toLowerCase();
+          const dom = cleanDomain(off.merchantDomain);
           const match = allowed.some((d) => dom === d || dom.endsWith(`.${d}`));
           if (!match) continue;
         }
@@ -155,7 +194,7 @@ export async function runAgentProcurementLoop(
     }
 
     if (!selectedProduct || !selectedOffer) {
-      const msg = `No matching products found for "${options.query}" under max price ${options.maxPrice} ${targetCurrency}`;
+      const msg = `No matching in-stock products found for "${options.query}" under max price ${options.maxPrice} ${targetCurrency}`;
       recordStep("DISCOVER", "FAILED", undefined, msg);
       return { success: false, steps, error: msg };
     }
@@ -240,7 +279,7 @@ export async function runAgentProcurementLoop(
       return { success: false, steps, error: msg };
     }
 
-    // Policy check if configured
+    // Spending policy evaluation
     if (options.policyEngine) {
       const policyEval = options.policyEngine.evaluateSafe({
         agentId,
@@ -256,49 +295,62 @@ export async function runAgentProcurementLoop(
     const orderAmount = selectedOffer.price;
     let escrowOrder: EscrowOrder;
 
-    if (options.createEscrowOrderFn) {
-      escrowOrder = await options.createEscrowOrderFn({
-        amount: orderAmount,
-        description: `Tessera Escrow for ${selectedProduct.title}`,
-        customId: transactionId,
-        referenceId: transactionId,
-        payee: { merchantId: selectedOffer.merchantDomain },
-      });
-    } else if (options.paypalClient) {
-      escrowOrder = await options.paypalClient.createEscrowOrder({
-        amount: orderAmount,
-        description: `Tessera Escrow for ${selectedProduct.title}`,
-        customId: transactionId,
-        referenceId: transactionId,
-        payee: { merchantId: selectedOffer.merchantDomain },
-      });
-    } else {
-      const msg = "PayPal client is required to execute escrow reservation";
-      recordStep("ESCROW_RESERVE", "FAILED", undefined, msg);
+    try {
+      if (options.createEscrowOrderFn) {
+        escrowOrder = await options.createEscrowOrderFn({
+          amount: orderAmount,
+          description: `Tessera Escrow for ${selectedProduct.title}`,
+          customId: transactionId,
+          referenceId: transactionId,
+          payee: { merchantId: selectedOffer.merchantDomain },
+        });
+      } else if (options.paypalClient) {
+        escrowOrder = await options.paypalClient.createEscrowOrder({
+          amount: orderAmount,
+          description: `Tessera Escrow for ${selectedProduct.title}`,
+          customId: transactionId,
+          referenceId: transactionId,
+          payee: { merchantId: selectedOffer.merchantDomain },
+        });
+      } else {
+        const msg = "PayPal client is required to execute escrow reservation";
+        recordStep("ESCROW_RESERVE", "FAILED", undefined, msg);
+        return { success: false, steps, error: msg };
+      }
+    } catch (createErr) {
+      const msg = createErr instanceof Error ? createErr.message : String(createErr);
+      recordStep("ESCROW_RESERVE", "FAILED", undefined, `Failed to create escrow order: ${msg}`);
       return { success: false, steps, error: msg };
     }
+
+    createdOrderId = String(escrowOrder.orderId);
 
     let authorization: EscrowAuthorization;
-    if (options.authorizeOrderFn) {
-      authorization = await options.authorizeOrderFn({
-        orderId: escrowOrder.orderId,
-      });
-    } else if (options.paypalClient) {
-      authorization = await options.paypalClient.authorizeOrder({
-        orderId: escrowOrder.orderId,
-      });
-    } else {
-      const msg = "PayPal authorization handler missing";
-      recordStep("ESCROW_RESERVE", "FAILED", undefined, msg);
-      return { success: false, steps, error: msg };
+    try {
+      if (options.authorizeOrderFn) {
+        authorization = await options.authorizeOrderFn({
+          orderId: escrowOrder.orderId,
+        });
+      } else if (options.paypalClient) {
+        authorization = await options.paypalClient.authorizeOrder({
+          orderId: escrowOrder.orderId,
+        });
+      } else {
+        const msg = "PayPal authorization handler missing";
+        recordStep("ESCROW_RESERVE", "FAILED", undefined, msg);
+        return { success: false, orderId: createdOrderId, steps, error: msg };
+      }
+    } catch (authErr) {
+      const msg = authErr instanceof Error ? authErr.message : String(authErr);
+      recordStep("ESCROW_RESERVE", "FAILED", undefined, `Failed to authorize escrow order: ${msg}`);
+      return { success: false, orderId: createdOrderId, steps, error: msg };
     }
 
-    const orderId = String(escrowOrder.orderId);
-    const authorizationId = String(authorization.authorizationId);
+    createdAuthId = String(authorization.authorizationId);
 
     recordStep("ESCROW_RESERVE", "COMPLETED", {
-      orderId,
-      authorizationId,
+      orderId: createdOrderId,
+      authorizationId: createdAuthId,
       status: authorization.status,
       escrowAmount: orderAmount.toDecimalString(),
       currency: orderAmount.currency,
@@ -312,12 +364,25 @@ export async function runAgentProcurementLoop(
     const carrierCode = options.carrier ?? "UPS";
 
     let milestone: ShipmentMilestone;
-    if (options.getShipmentTrackingFn) {
-      milestone = await options.getShipmentTrackingFn(authorizationId, trackingNum);
-    } else if (options.paypalClient) {
-      try {
-        milestone = await options.paypalClient.getShipmentTracking(authorizationId, trackingNum);
-      } catch {
+    try {
+      if (options.getShipmentTrackingFn) {
+        milestone = await options.getShipmentTrackingFn(createdAuthId, trackingNum);
+      } else if (options.paypalClient) {
+        try {
+          milestone = await options.paypalClient.getShipmentTracking(createdAuthId, trackingNum);
+        } catch {
+          milestone = {
+            transactionId: asTransactionId(transactionId),
+            trackingNumber: trackingNum,
+            carrier: carrierCode,
+            status: options.simulateCarrierDelivery
+              ? ShipmentMilestoneStatus.DELIVERED
+              : ShipmentMilestoneStatus.IN_TRANSIT,
+            rawStatus: options.simulateCarrierDelivery ? "DELIVERED" : "IN_TRANSIT",
+            trackingNumberValidated: true,
+          };
+        }
+      } else {
         milestone = {
           transactionId: asTransactionId(transactionId),
           trackingNumber: trackingNum,
@@ -329,16 +394,20 @@ export async function runAgentProcurementLoop(
           trackingNumberValidated: true,
         };
       }
-    } else {
-      milestone = {
-        transactionId: asTransactionId(transactionId),
-        trackingNumber: trackingNum,
-        carrier: carrierCode,
-        status: options.simulateCarrierDelivery
-          ? ShipmentMilestoneStatus.DELIVERED
-          : ShipmentMilestoneStatus.IN_TRANSIT,
-        rawStatus: options.simulateCarrierDelivery ? "DELIVERED" : "IN_TRANSIT",
-        trackingNumberValidated: true,
+    } catch (trackErr) {
+      const msg = trackErr instanceof Error ? trackErr.message : String(trackErr);
+      recordStep(
+        "SHIPMENT_TRACK",
+        "FAILED",
+        { trackingNumber: trackingNum },
+        `Carrier tracking query failed: ${msg}`,
+      );
+      return {
+        success: false,
+        orderId: createdOrderId,
+        authorizationId: createdAuthId,
+        steps,
+        error: msg,
       };
     }
 
@@ -356,8 +425,8 @@ export async function runAgentProcurementLoop(
       recordStep("SETTLE", "SKIPPED", undefined, "Settlement skipped pending verified delivery");
       return {
         success: false,
-        orderId,
-        authorizationId,
+        orderId: createdOrderId,
+        authorizationId: createdAuthId,
         steps,
         error: msg,
       };
@@ -375,7 +444,7 @@ export async function runAgentProcurementLoop(
     // -------------------------------------------------------------
     let captureResult: EscrowCaptureResult;
     const captureOptions = {
-      authorizationId: asAuthorizationId(authorizationId),
+      authorizationId: asAuthorizationId(createdAuthId),
       transactionId: asTransactionId(transactionId),
       milestone: {
         ...milestone,
@@ -386,14 +455,32 @@ export async function runAgentProcurementLoop(
       finalCapture: true,
     };
 
-    if (options.captureEscrowFn) {
-      captureResult = await options.captureEscrowFn(captureOptions);
-    } else if (options.paypalClient) {
-      captureResult = await options.paypalClient.captureEscrow(captureOptions);
-    } else {
-      const msg = "PayPal escrow capture service missing";
-      recordStep("SETTLE", "FAILED", undefined, msg);
-      return { success: false, orderId, authorizationId, steps, error: msg };
+    try {
+      if (options.captureEscrowFn) {
+        captureResult = await options.captureEscrowFn(captureOptions);
+      } else if (options.paypalClient) {
+        captureResult = await options.paypalClient.captureEscrow(captureOptions);
+      } else {
+        const msg = "PayPal escrow capture service missing";
+        recordStep("SETTLE", "FAILED", undefined, msg);
+        return {
+          success: false,
+          orderId: createdOrderId,
+          authorizationId: createdAuthId,
+          steps,
+          error: msg,
+        };
+      }
+    } catch (settleErr) {
+      const msg = settleErr instanceof Error ? settleErr.message : String(settleErr);
+      recordStep("SETTLE", "FAILED", undefined, `Escrow capture failed: ${msg}`);
+      return {
+        success: false,
+        orderId: createdOrderId,
+        authorizationId: createdAuthId,
+        steps,
+        error: msg,
+      };
     }
 
     const captureId = String(captureResult.captureId);
@@ -408,17 +495,18 @@ export async function runAgentProcurementLoop(
 
     return {
       success: true,
-      orderId,
-      authorizationId,
+      orderId: createdOrderId,
+      authorizationId: createdAuthId,
       captureId,
       settledAmount: orderAmount,
       steps,
     };
-  } catch (loopErr) {
-    const errorMsg = loopErr instanceof Error ? loopErr.message : String(loopErr);
-    recordStep("SETTLE", "FAILED", undefined, `Procurement loop unhandled exception: ${errorMsg}`);
+  } catch (unhandledErr) {
+    const errorMsg = unhandledErr instanceof Error ? unhandledErr.message : String(unhandledErr);
     return {
       success: false,
+      orderId: createdOrderId,
+      authorizationId: createdAuthId,
       steps,
       error: errorMsg,
     };

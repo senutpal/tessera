@@ -84,34 +84,61 @@ export function registerCheckSettlementTool(
           }
         }
 
-        const escrowStatus = orderData?.status ?? "HELD";
-        const shipmentStatus = trackingMilestone?.status ?? "SHIPPED";
-        const isDelivered = shipmentStatus === "DELIVERED";
-        const canCapture = isDelivered && escrowStatus !== "COMPLETED" && escrowStatus !== "VOIDED";
+        const authId =
+          args.authorization_id ??
+          (orderData?.authorizationId ? String(orderData.authorizationId) : undefined);
+
+        const escrowStatus = orderData?.status ?? (args.authorization_id ? "HELD" : "NOT_FOUND");
+
+        const shipmentStatus = trackingMilestone?.status ?? "NOT_FOUND";
+        const isDelivered = String(shipmentStatus) === "DELIVERED";
+
+        const isEscrowAuthorized =
+          Boolean(authId) || escrowStatus === "HELD" || escrowStatus === "APPROVED";
+
+        const canCapture =
+          isDelivered &&
+          isEscrowAuthorized &&
+          escrowStatus !== "COMPLETED" &&
+          escrowStatus !== "VOIDED";
+
+        let settlementMessage = "PENDING DELIVERY";
+        if (canCapture) {
+          settlementMessage = "READY FOR CAPTURE";
+        } else if (escrowStatus === "COMPLETED") {
+          settlementMessage = "ALREADY CAPTURED / SETTLED";
+        } else if (escrowStatus === "VOIDED") {
+          settlementMessage = "AUTHORIZATION VOIDED";
+        } else if (!isEscrowAuthorized && args.order_id && !args.tracking_number) {
+          settlementMessage = "PENDING AUTHORIZATION";
+        } else if (!isDelivered) {
+          settlementMessage = "PENDING DELIVERY";
+        } else if (!isEscrowAuthorized) {
+          settlementMessage = "PENDING AUTHORIZATION";
+        }
 
         const lines = [
           "## Tessera Settlement Status Check",
           args.order_id ? `- **Order ID:** ${args.order_id}` : undefined,
-          args.authorization_id ? `- **Authorization ID:** ${args.authorization_id}` : undefined,
+          authId ? `- **Authorization ID:** ${authId}` : undefined,
           `- **Escrow Status:** ${escrowStatus}`,
           args.tracking_number ? `- **Tracking Number:** ${args.tracking_number}` : undefined,
           `- **Shipment Milestone:** ${shipmentStatus}`,
           `- **Delivery Verified:** ${isDelivered ? "YES" : "NO"}`,
-          `- **Settlement Ready (Capture Permitted):** ${canCapture ? "READY FOR CAPTURE" : "PENDING DELIVERY"}`,
+          `- **Settlement Ready (Capture Permitted):** ${settlementMessage}`,
         ].filter((l): l is string => Boolean(l));
 
         const structuredPayload = {
           success: true,
           orderId: args.order_id,
-          authorizationId:
-            args.authorization_id ??
-            (orderData?.authorizationId ? String(orderData.authorizationId) : undefined),
+          authorizationId: authId,
           escrowStatus,
           trackingNumber: args.tracking_number,
           shipmentStatus,
           deliveryVerified: isDelivered,
           settlementReady: canCapture,
           canCapture,
+          statusMessage: settlementMessage,
         };
 
         return {
