@@ -147,16 +147,34 @@ describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (Procurement
     });
 
     it("triggers zoom actions when toolbar zoom buttons are clicked", () => {
-      const ref = createRef<ProcurementGanttHandle>();
-      render(<ProcurementGantt ref={ref} records={[mockRecord1]} />);
+      const mockZoomIn = vi.fn();
+      const mockZoomOut = vi.fn();
+      const mockZoomToFit = vi.fn();
+
+      const mockGanttInstance = {
+        zoomIn: mockZoomIn,
+        zoomOut: mockZoomOut,
+        zoomToFit: mockZoomToFit,
+        destroy: vi.fn(),
+        isDestroyed: false,
+      };
+
+      const factory = vi.fn().mockReturnValue(mockGanttInstance);
+
+      render(<ProcurementGantt records={[mockRecord1]} ganttInstanceFactory={factory} />);
 
       const zoomInBtn = screen.getByTestId("zoom-in-btn");
       const zoomOutBtn = screen.getByTestId("zoom-out-btn");
       const zoomFitBtn = screen.getByTestId("zoom-fit-btn");
 
       fireEvent.click(zoomInBtn);
+      expect(mockZoomIn).toHaveBeenCalledTimes(1);
+
       fireEvent.click(zoomOutBtn);
+      expect(mockZoomOut).toHaveBeenCalledTimes(1);
+
       fireEvent.click(zoomFitBtn);
+      expect(mockZoomToFit).toHaveBeenCalledTimes(1);
     });
   });
 
