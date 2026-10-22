@@ -510,4 +510,94 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
     expect(settleStep?.status).toBe("SKIPPED");
     expect(captureCalled).toBe(false);
   });
+
+  it("fails at ESCROW_RESERVE when merchant domain cannot be resolved to a trusted PayPal merchant ID", async () => {
+    const buyerKeyPair = generateEd25519KeyPair();
+    const mockProducts = [
+      {
+        id: "item-unmapped",
+        title: "Unmapped Merchant Item",
+        domain: "unknown-store.com",
+        price: 49.99,
+        inStock: true,
+      },
+    ];
+
+    let createEscrowCalled = false;
+    const result = await runAgentProcurementLoop({
+      query: "item",
+      maxPrice: 100.0,
+      buyerKeyPair,
+      merchantRegistry: {}, // empty registry so domain cannot be resolved
+      searchCatalogFn: async () => createMockCatalogResponse(mockProducts),
+      createEscrowOrderFn: async () => {
+        createEscrowCalled = true;
+        throw new Error("Must not be called");
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(createEscrowCalled).toBe(false);
+    expect(result.error).toContain("Unable to resolve trusted PayPal merchant ID");
+    const reserveStep = result.steps.find((s) => s.step === "ESCROW_RESERVE");
+    expect(reserveStep?.status).toBe("FAILED");
+  });
+
+  it("resolves merchant ID from registry and passes it as payee.merchantId to createEscrowOrder", async () => {
+    const buyerKeyPair = generateEd25519KeyPair();
+    const mockProducts = [
+      {
+        id: "item-custom",
+        title: "Custom Merchant Item",
+        domain: "custom-supplier.com",
+        price: 39.99,
+        inStock: true,
+      },
+    ];
+
+    let receivedPayeeMerchantId: string | undefined;
+    const result = await runAgentProcurementLoop({
+      query: "item",
+      maxPrice: 100.0,
+      buyerKeyPair,
+      merchantRegistry: {
+        "custom-supplier.com": "MERC-CUSTOM-SUPPLIER-999",
+      },
+      searchCatalogFn: async () => createMockCatalogResponse(mockProducts),
+      createEscrowOrderFn: async (opts) => {
+        receivedPayeeMerchantId = opts.payee?.merchantId;
+        return {
+          orderId: asOrderId("ORDER-CUSTOM-01"),
+          status: "CREATED",
+          amount: Money.fromDecimalString("39.99", "USD"),
+          links: [],
+          rawResponse: createMockOrderResponse("ORDER-CUSTOM-01"),
+        };
+      },
+      authorizeOrderFn: async (opts) => ({
+        authorizationId: asAuthorizationId("AUTH-CUSTOM-01"),
+        orderId: asOrderId(String(opts.orderId)),
+        status: "CREATED",
+        amount: Money.fromDecimalString("39.99", "USD"),
+        rawResponse: createMockOrderResponse(String(opts.orderId)),
+      }),
+      simulateCarrierDelivery: true,
+      captureEscrowFn: async () => ({
+        authorizationId: asAuthorizationId("AUTH-CUSTOM-01"),
+        captureId: asCaptureId("CAP-CUSTOM-01"),
+        status: "COMPLETED",
+        amount: Money.fromDecimalString("39.99", "USD"),
+        finalCapture: true,
+        capturedAt: new Date().toISOString(),
+        requestId: "req-custom-01",
+        releaseTrigger: "CARRIER_DELIVERY_PROOF",
+        clearinghouseState: ClearinghouseState.SETTLED,
+        rawResponse: createMockCaptureResponse("CAP-CUSTOM-01"),
+      }),
+    });
+
+    expect(result.success).toBe(true);
+    expect(receivedPayeeMerchantId).toBe("MERC-CUSTOM-SUPPLIER-999");
+    expect(receivedPayeeMerchantId).not.toBe("custom-supplier.com");
+  });
 });

@@ -49,6 +49,46 @@ export interface ProcurementStepAudit {
   error?: string | undefined;
 }
 
+export const DEFAULT_MERCHANT_REGISTRY: Readonly<Record<string, string>> = Object.freeze({
+  "staples.com": "MERC-STAPLES-001",
+  "officedepot.com": "MERC-OFFICEDEPOT-001",
+  "store.com": "MERC-STORE-001",
+  "store-a.com": "MERC-STORE-A-001",
+  "store-b.com": "MERC-STORE-B-001",
+  "lenovo.com": "MERC-LENOVO-001",
+  "homedepot.com": "MERC-HOMEDEPOT-001",
+  "target.com": "MERC-TARGET-001",
+  "walmart.com": "MERC-WALMART-001",
+  "amazon.com": "MERC-AMAZON-001",
+  "bestbuy.com": "MERC-BESTBUY-001",
+});
+
+export type MerchantRegistryResolver =
+  | Record<string, string>
+  | Map<string, string>
+  | ((domain: string) => string | undefined | Promise<string | undefined>);
+
+export async function resolveMerchantId(
+  domain: string,
+  registry?: MerchantRegistryResolver,
+): Promise<string | undefined> {
+  const norm = cleanDomain(domain);
+  if (typeof registry === "function") {
+    const res = await registry(norm);
+    if (res) return res;
+  } else if (registry instanceof Map) {
+    if (registry.has(norm)) return registry.get(norm);
+    if (registry.has(domain)) return registry.get(domain);
+  } else if (registry && typeof registry === "object") {
+    if (registry[norm]) return registry[norm];
+    if (registry[domain]) return registry[domain];
+  }
+  if (!registry) {
+    return DEFAULT_MERCHANT_REGISTRY[norm] ?? DEFAULT_MERCHANT_REGISTRY[domain];
+  }
+  return undefined;
+}
+
 export interface AgentProcurementOptions {
   query: string;
   maxPrice: number;
@@ -56,6 +96,7 @@ export interface AgentProcurementOptions {
   allowedDomains?: string[] | undefined;
   buyerKeyPair: Ed25519KeyPair;
   agentId?: string | undefined;
+  merchantRegistry?: MerchantRegistryResolver | undefined;
   channel3Client?: Channel3Client | undefined;
   searchCatalogFn?:
     | ((params: { query: string; limit?: number | undefined }) => Promise<unknown>)
@@ -214,12 +255,16 @@ export async function runAgentProcurementLoop(
     const transactionId = crypto.randomUUID();
     const nowEpoch = Math.floor(Date.now() / 1000);
     const mandateAmount = selectedOffer.price.toMinorUnits();
+    const resolvedMerchantId = await resolveMerchantId(
+      selectedOffer.merchantDomain,
+      options.merchantRegistry,
+    );
 
     const paymentMandate: PaymentMandate = {
       vct: "mandate.payment.1",
       transaction_id: transactionId,
       payee: {
-        id: selectedOffer.merchantDomain,
+        id: resolvedMerchantId ?? selectedOffer.merchantDomain,
         name: selectedOffer.merchantDomain,
         website: `https://${selectedOffer.merchantDomain}`,
       },
@@ -252,7 +297,7 @@ export async function runAgentProcurementLoop(
 
     recordStep("MANDATE_SIGN", "COMPLETED", {
       transactionId,
-      payee: selectedOffer.merchantDomain,
+      payee: resolvedMerchantId ?? selectedOffer.merchantDomain,
       amount: selectedOffer.price.toDecimalString(),
       currency: selectedOffer.price.currency,
       signatureLength: signedMandate.signature.length,
@@ -292,6 +337,13 @@ export async function runAgentProcurementLoop(
       }
     }
 
+    // Require resolved PayPal merchant account ID from trusted merchant registry
+    if (!resolvedMerchantId) {
+      const msg = `Unable to resolve trusted PayPal merchant ID for domain "${selectedOffer.merchantDomain}". Untrusted or unmapped merchant.`;
+      recordStep("ESCROW_RESERVE", "FAILED", undefined, msg);
+      return { success: false, steps, error: msg };
+    }
+
     const orderAmount = selectedOffer.price;
     let escrowOrder: EscrowOrder;
 
@@ -302,7 +354,7 @@ export async function runAgentProcurementLoop(
           description: `Tessera Escrow for ${selectedProduct.title}`,
           customId: transactionId,
           referenceId: transactionId,
-          payee: { merchantId: selectedOffer.merchantDomain },
+          payee: { merchantId: resolvedMerchantId },
         });
       } else if (options.paypalClient) {
         escrowOrder = await options.paypalClient.createEscrowOrder({
@@ -310,7 +362,7 @@ export async function runAgentProcurementLoop(
           description: `Tessera Escrow for ${selectedProduct.title}`,
           customId: transactionId,
           referenceId: transactionId,
-          payee: { merchantId: selectedOffer.merchantDomain },
+          payee: { merchantId: resolvedMerchantId },
         });
       } else {
         const msg = "PayPal client is required to execute escrow reservation";

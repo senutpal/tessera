@@ -5,9 +5,12 @@
 export {
   type AgentProcurementOptions,
   type AgentProcurementResult,
+  DEFAULT_MERCHANT_REGISTRY,
+  type MerchantRegistryResolver,
   type ProcurementStepAudit,
   type ProcurementStepName,
   type ProcurementStepStatus,
+  resolveMerchantId,
   runAgentProcurementLoop,
 } from "./lib/orchestrator/agentProcurementLoop.js";
 // MCP Server Instance & Transports
