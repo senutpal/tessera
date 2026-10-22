@@ -67,9 +67,11 @@ export function registerSearchCatalogTool(server: McpServer, context: SearchCata
     async (args) => {
       try {
         const client = context.channel3Client ?? new Channel3Client();
+        const requestedLimit = args.limit ?? 5;
         const searchOpts: { query: string; limit?: number | undefined } = {
           query: args.query,
-          ...(args.limit !== undefined ? { limit: args.limit } : {}),
+          // Overfetch: local domain/price/stock filters reduce the result set.
+          limit: Math.max(requestedLimit * 4, 20),
         };
 
         const rawResults = context.searchProductsFn
@@ -126,7 +128,7 @@ export function registerSearchCatalogTool(server: McpServer, context: SearchCata
           return firstOfferA.price.amount - firstOfferB.price.amount;
         });
 
-        const limitedProducts = filtered.slice(0, args.limit ?? 5);
+        const limitedProducts = filtered.slice(0, requestedLimit);
 
         if (limitedProducts.length === 0) {
           const noResultsMsg = `No products found matching query "${args.query}" under specified budget/domain constraints.`;
