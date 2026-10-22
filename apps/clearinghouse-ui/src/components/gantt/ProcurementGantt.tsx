@@ -236,10 +236,14 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
           if (project) {
             try {
               if (typeof project.loadInlineData === "function") {
-                void project.loadInlineData({
-                  tasksData: projectData.tasksData,
-                  dependenciesData: projectData.dependenciesData,
-                });
+                void project
+                  .loadInlineData({
+                    tasksData: projectData.tasksData,
+                    dependenciesData: projectData.dependenciesData,
+                    tasks: projectData.tasksData,
+                    dependencies: projectData.dependenciesData,
+                  })
+                  .catch(() => {});
               } else {
                 project.tasksData = projectData.tasksData;
                 project.dependenciesData = projectData.dependenciesData;
@@ -308,7 +312,7 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
                   return `<div class="p-2 font-mono text-xs">
                     <div class="font-bold">${esc(taskRecord.name)}</div>
                     <div>Status: ${esc(taskRecord.status)}</div>
-                    <div>Duration: ${taskRecord.duration || 0}h</div>
+                    <div>Duration: ${esc(taskRecord.duration ?? 0)}h</div>
                   </div>`;
                 },
               },
@@ -360,10 +364,14 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
           | undefined;
         if (project) {
           if (typeof project.loadInlineData === "function") {
-            void project.loadInlineData({
-              tasksData: projectData.tasksData,
-              dependenciesData: projectData.dependenciesData,
-            });
+            void project
+              .loadInlineData({
+                tasksData: projectData.tasksData,
+                dependenciesData: projectData.dependenciesData,
+                tasks: projectData.tasksData,
+                dependencies: projectData.dependenciesData,
+              })
+              .catch(() => {});
           } else {
             project.tasksData = projectData.tasksData;
             project.dependenciesData = projectData.dependenciesData;
