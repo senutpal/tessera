@@ -406,7 +406,7 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
                 data-testid="sla-warning-indicator"
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-mono font-medium bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-500/10 dark:text-rose-400 dark:border-rose-500/25"
               >
-                <AlertTriangle className="w-3.5 h-3.5 text-rose-500 animate-pulse" />
+                <AlertTriangle className="w-3.5 h-3.5 text-rose-500 motion-safe:animate-pulse" />
                 <span>SLA Alert: {slaWarnings.length} Overdue</span>
               </div>
             )}
@@ -573,7 +573,7 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
                             {isCompleted ? (
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                             ) : isInProgress ? (
-                              <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0 animate-spin" />
+                              <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0 motion-safe:animate-spin" />
                             ) : (
                               <span className="w-3.5 h-3.5 rounded-full border border-zinc-300 dark:border-zinc-600 shrink-0" />
                             )}
