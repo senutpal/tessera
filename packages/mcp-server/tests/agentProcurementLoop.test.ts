@@ -633,6 +633,14 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
           rawResponse: createMockOrderResponse("ORDER-PS-01"),
         };
       },
+      getShipmentTracking: async (authId: string, trackNum?: string) => ({
+        transactionId: asTransactionId(authId),
+        trackingNumber: trackNum ?? "TRACK-PS",
+        carrier: "UPS",
+        status: ShipmentMilestoneStatus.DELIVERED,
+        rawStatus: "DELIVERED",
+        trackingNumberValidated: true,
+      }),
       captureEscrow: async () => ({
         authorizationId: asAuthorizationId("AUTH-PS-01"),
         captureId: asCaptureId("CAP-PS-01"),
@@ -698,6 +706,14 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
         amount: Money.fromDecimalString("15.00", "USD"),
         rawResponse: createMockOrderResponse("ORDER-POLL-01"),
       }),
+      getShipmentTracking: async (authId: string, trackNum?: string) => ({
+        transactionId: asTransactionId(authId),
+        trackingNumber: trackNum ?? "TRACK-POLL",
+        carrier: "UPS",
+        status: ShipmentMilestoneStatus.DELIVERED,
+        rawStatus: "DELIVERED",
+        trackingNumberValidated: true,
+      }),
       captureEscrow: async () => ({
         authorizationId: asAuthorizationId("AUTH-POLL-01"),
         captureId: asCaptureId("CAP-POLL-01"),
@@ -725,5 +741,58 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
 
     expect(result.success).toBe(true);
     expect(pollCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it("fails and reports SHIPMENT_TRACK step failure when paypalClient.getShipmentTracking throws", async () => {
+    const buyerKeyPair = generateEd25519KeyPair();
+    const mockProducts = [
+      {
+        id: "item-track-fail",
+        title: "Tracker Failure Item",
+        domain: "staples.com",
+        price: 30.0,
+      },
+    ];
+
+    let captureEscrowCalled = false;
+    const mockPayPalClient = {
+      createEscrowOrder: async (opts: any) => ({
+        orderId: asOrderId("ORDER-TF-01"),
+        status: "APPROVED" as const,
+        amount: opts.amount,
+        links: [],
+        rawResponse: createMockOrderResponse("ORDER-TF-01"),
+      }),
+      authorizeOrder: async (opts: any) => ({
+        authorizationId: asAuthorizationId("AUTH-TF-01"),
+        orderId: opts.orderId,
+        status: "CREATED",
+        amount: Money.fromDecimalString("30.00", "USD"),
+        rawResponse: createMockOrderResponse("ORDER-TF-01"),
+      }),
+      getShipmentTracking: async () => {
+        throw new Error("PayPal Shipping Tracking API 404: TRACKER_NOT_FOUND");
+      },
+      captureEscrow: async () => {
+        captureEscrowCalled = true;
+        throw new Error("Must not be called");
+      },
+    };
+
+    const result = await runAgentProcurementLoop({
+      query: "item",
+      maxPrice: 50.0,
+      buyerKeyPair,
+      paypalClient: mockPayPalClient as any,
+      simulateCarrierDelivery: true, // Even with simulateCarrierDelivery, real tracker error MUST propagate
+      searchCatalogFn: async () => createMockCatalogResponse(mockProducts),
+    });
+
+    expect(result.success).toBe(false);
+    expect(captureEscrowCalled).toBe(false);
+    expect(result.error).toContain("TRACKER_NOT_FOUND");
+    const trackStep = result.steps.find((s) => s.step === "SHIPMENT_TRACK");
+    expect(trackStep?.status).toBe("FAILED");
+    expect(trackStep?.error).toContain("TRACKER_NOT_FOUND");
   });
 });
