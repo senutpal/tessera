@@ -310,6 +310,23 @@ export async function voidAuthorization(
 }
 
 /**
+ * High-level helper to fetch authorization status and details by authorization ID.
+ */
+export async function getAuthorization(
+  config: PayPalConfig,
+  authorizationId: string,
+  clientOptions?: { eventSink?: EscrowEventSink | undefined },
+): Promise<{
+  id: string;
+  status: string;
+  amount?: { currency_code: string; value: string } | undefined;
+  rawResponse?: Record<string, unknown> | undefined;
+}> {
+  const client = new PayPalClient(config, clientOptions);
+  return client.getAuthorization(authorizationId);
+}
+
+/**
  * High-level helper to register batch shipment tracking info with PayPal Tracking v1.
  */
 export async function registerShipmentTracking(
