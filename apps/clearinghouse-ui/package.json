@@ -21,7 +21,6 @@
   },
   "dependencies": {
     "@bryntum/gantt": "npm:@bryntum/gantt-trial@7.3.7",
-    "@bryntum/gantt-react": "7.3.7",
     "@tessera/event-bus": "workspace:*",
     "ag-grid-community": "^32.3.3",
     "ag-grid-enterprise": "^32.3.3",

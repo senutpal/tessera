@@ -64,9 +64,6 @@ importers:
       '@bryntum/gantt':
         specifier: npm:@bryntum/gantt-trial@7.3.7
         version: '@bryntum/gantt-trial@7.3.7'
-      '@bryntum/gantt-react':
-        specifier: 7.3.7
-        version: 7.3.7
       '@tessera/event-bus':
         specifier: workspace:*
         version: link:../../packages/event-bus
@@ -336,10 +333,6 @@ packages:
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [win32]
-
-  '@bryntum/gantt-react@7.3.7':
-    resolution: {integrity: sha512-nKIQ8/BVPF7BqeZDRZSWMFP+ZvjqK8p/TNA6L1e/lH+RQO18SRw6fQeGctj118LHcZQ/CA3utebXv7ORiCRwWA==}
-    engines: {node: '>=0.10.0'}
 
   '@bryntum/gantt-trial-lib@1.0.1':
     resolution: {integrity: sha512-VWtowNi9FBCC6EWz8zZjrnPALCsFrYt4HPwmsgqv3qediQPfyYM/5Bq3rFuEUa1/2C/1u7YXzW2q1HZykHnp+Q==}
@@ -2293,8 +2286,6 @@ snapshots:
 
   '@biomejs/cli-win32-x64@2.5.15':
     optional: true
-
-  '@bryntum/gantt-react@7.3.7': {}
 
   '@bryntum/gantt-trial-lib@1.0.1': {}
 
