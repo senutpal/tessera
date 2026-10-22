@@ -20,6 +20,84 @@ import {
 import type { PolicyEngine } from "@tessera/policy";
 import { z } from "zod";
 
+function extractCartAmountFromJwt(
+  jwt: string,
+): { amount: number; currency?: string | undefined } | null {
+  try {
+    const parts = jwt.split(".");
+    if (parts.length < 2) return null;
+    const jsonStr = Buffer.from(parts[1], "base64url").toString("utf8");
+    const payload = JSON.parse(jsonStr) as Record<string, unknown>;
+    if (typeof payload !== "object" || payload === null) return null;
+
+    const cart =
+      typeof payload.cart === "object" && payload.cart !== null
+        ? (payload.cart as Record<string, unknown>)
+        : payload;
+
+    const candidate = cart.payment_amount ?? cart.total ?? cart.total_amount ?? cart.amount;
+
+    if (candidate === undefined || candidate === null) return null;
+
+    if (typeof candidate === "object" && candidate !== null) {
+      const candObj = candidate as Record<string, unknown>;
+      if (typeof candObj.amount === "number") {
+        return {
+          amount: candObj.amount / 100,
+          currency: typeof candObj.currency === "string" ? candObj.currency : undefined,
+        };
+      }
+      if (typeof candObj.value === "string") {
+        const val = Number.parseFloat(candObj.value);
+        if (!Number.isNaN(val) && val > 0) {
+          return {
+            amount: val,
+            currency:
+              typeof candObj.currency_code === "string"
+                ? candObj.currency_code
+                : typeof candObj.currency === "string"
+                  ? candObj.currency
+                  : undefined,
+          };
+        }
+      }
+    }
+
+    if (typeof candidate === "number" && !Number.isNaN(candidate) && candidate > 0) {
+      const curr =
+        typeof cart.currency === "string"
+          ? cart.currency
+          : typeof payload.currency === "string"
+            ? payload.currency
+            : undefined;
+      return {
+        amount: candidate,
+        currency: curr,
+      };
+    }
+
+    if (typeof candidate === "string") {
+      const val = Number.parseFloat(candidate);
+      if (!Number.isNaN(val) && val > 0) {
+        const curr =
+          typeof cart.currency === "string"
+            ? cart.currency
+            : typeof payload.currency === "string"
+              ? payload.currency
+              : undefined;
+        return {
+          amount: val,
+          currency: curr,
+        };
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export const SubmitMandateInputShape = {
   signed_mandate: z
     .object({
@@ -134,7 +212,19 @@ export function registerSubmitMandateTool(server: McpServer, context: SubmitMand
             ? (signed.mandate as { agent_id: string }).agent_id
             : "agent-mcp-orchestrator");
 
-        if (context.policyEngine && isPaymentMandate) {
+        if (context.policyEngine) {
+          if (!isPaymentMandate) {
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text" as const,
+                  text: "Spending policy violation: Configured policy engine does not support non-payment mandates (CheckoutMandate cannot bypass policy enforcement).",
+                },
+              ],
+            };
+          }
+
           const paymentMandate = verifiedMandate as PaymentMandate;
           const policyEval = context.policyEngine.evaluateSafe({
             agentId: effectiveAgentId,
@@ -172,27 +262,54 @@ export function registerSubmitMandateTool(server: McpServer, context: SubmitMand
           if (!customId && pm.transaction_id) {
             customId = pm.transaction_id;
           }
-        } else if (args.amount !== undefined) {
-          money = Money.fromDecimalString(
-            args.amount.toFixed(2),
-            (args.currency ?? "USD").toUpperCase(),
-          );
+        } else {
+          const checkoutJwt =
+            typeof (verifiedMandate as { checkout_jwt?: unknown }).checkout_jwt === "string"
+              ? (verifiedMandate as { checkout_jwt: string }).checkout_jwt
+              : undefined;
+
+          const signedCart = checkoutJwt ? extractCartAmountFromJwt(checkoutJwt) : null;
+
+          if (signedCart) {
+            if (args.amount !== undefined) {
+              const diff = Math.abs(args.amount - signedCart.amount);
+              if (diff > 0.009) {
+                return {
+                  isError: true,
+                  content: [
+                    {
+                      type: "text" as const,
+                      text: `Cart amount mismatch: supplied amount (${args.amount.toFixed(2)}) does not match signed checkout_jwt cart total (${signedCart.amount.toFixed(2)}).`,
+                    },
+                  ],
+                };
+              }
+            }
+            const currency = (args.currency ?? signedCart.currency ?? "USD").toUpperCase();
+            money = Money.fromDecimalString(signedCart.amount.toFixed(2), currency);
+          } else if (args.amount !== undefined) {
+            money = Money.fromDecimalString(
+              args.amount.toFixed(2),
+              (args.currency ?? "USD").toUpperCase(),
+            );
+          } else {
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text" as const,
+                  text: "Mandate does not include payment_amount, and no explicit `amount` parameter was provided.",
+                },
+              ],
+            };
+          }
+
           if (
             !customId &&
             typeof (verifiedMandate as { checkout_hash?: unknown }).checkout_hash === "string"
           ) {
             customId = (verifiedMandate as { checkout_hash: string }).checkout_hash;
           }
-        } else {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text" as const,
-                text: "Mandate does not include payment_amount, and no explicit `amount` parameter was provided.",
-              },
-            ],
-          };
         }
 
         // 4. Create and authorize PayPal escrow order (intent: AUTHORIZE)
