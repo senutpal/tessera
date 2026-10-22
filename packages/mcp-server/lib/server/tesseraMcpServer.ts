@@ -4,7 +4,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { Channel3Client } from "@tessera/channel3";
-import type { NonceStore } from "@tessera/mandates";
+import { InMemoryNonceStore, type NonceStore } from "@tessera/mandates";
 import type {
   AuthorizeOrderOptions,
   CreateEscrowOrderOptions,
@@ -51,10 +51,12 @@ interface SseSession {
 export class TesseraMcpServer {
   private readonly mcpServer: McpServer;
   private readonly options: TesseraMcpServerOptions;
+  private readonly nonceStore: NonceStore;
   private readonly sseSessions = new Map<string, SseSession>();
 
   constructor(options: TesseraMcpServerOptions = {}) {
     this.options = options;
+    this.nonceStore = options.nonceStore ?? new InMemoryNonceStore();
     this.mcpServer = this.createMcpServerInstance();
   }
 
@@ -85,7 +87,7 @@ export class TesseraMcpServer {
       paypalClient: this.options.paypalClient,
       paypalConfig: this.options.paypalConfig,
       policyEngine: this.options.policyEngine,
-      nonceStore: this.options.nonceStore,
+      nonceStore: this.nonceStore,
       createEscrowOrderFn: this.options.createEscrowOrderFn,
       authorizeOrderFn: this.options.authorizeOrderFn,
     });
