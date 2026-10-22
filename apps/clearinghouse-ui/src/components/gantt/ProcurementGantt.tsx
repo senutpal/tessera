@@ -226,10 +226,24 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
           return !isCriticalPathActive;
         },
         refreshData: () => {
-          if (ganttInstanceRef.current?.project) {
+          const project = ganttInstanceRef.current?.project as
+            | {
+                loadInlineData?: (data: Record<string, unknown>) => Promise<unknown>;
+                tasksData?: unknown;
+                dependenciesData?: unknown;
+              }
+            | undefined;
+          if (project) {
             try {
-              ganttInstanceRef.current.project.tasksData = projectData.tasksData;
-              ganttInstanceRef.current.project.dependenciesData = projectData.dependenciesData;
+              if (typeof project.loadInlineData === "function") {
+                void project.loadInlineData({
+                  tasksData: projectData.tasksData,
+                  dependenciesData: projectData.dependenciesData,
+                });
+              } else {
+                project.tasksData = projectData.tasksData;
+                project.dependenciesData = projectData.dependenciesData;
+              }
             } catch {
               // ignore
             }
@@ -337,9 +351,23 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
     useEffect(() => {
       if (!ganttInstanceRef.current) return;
       try {
-        if (ganttInstanceRef.current.project) {
-          ganttInstanceRef.current.project.tasksData = projectData.tasksData;
-          ganttInstanceRef.current.project.dependenciesData = projectData.dependenciesData;
+        const project = ganttInstanceRef.current.project as
+          | {
+              loadInlineData?: (data: Record<string, unknown>) => Promise<unknown>;
+              tasksData?: unknown;
+              dependenciesData?: unknown;
+            }
+          | undefined;
+        if (project) {
+          if (typeof project.loadInlineData === "function") {
+            void project.loadInlineData({
+              tasksData: projectData.tasksData,
+              dependenciesData: projectData.dependenciesData,
+            });
+          } else {
+            project.tasksData = projectData.tasksData;
+            project.dependenciesData = projectData.dependenciesData;
+          }
         }
         if (ganttInstanceRef.current.features?.criticalPaths) {
           ganttInstanceRef.current.features.criticalPaths.disabled = !isCriticalPathActive;
