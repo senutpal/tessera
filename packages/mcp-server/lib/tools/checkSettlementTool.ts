@@ -137,11 +137,15 @@ export function registerCheckSettlementTool(
 
         // 3. Fallback for mock EscrowOrder with authorizationId when rawResponse has no nested authorizations array
         if (!authStatus && orderData?.authorizationId) {
-          authStatus = "CREATED";
+          if (orderData.status === "VOIDED") {
+            authStatus = "VOIDED";
+          } else {
+            authStatus = "CREATED";
+          }
         }
 
         const escrowStatus =
-          authStatus ?? orderData?.status ?? (args.authorization_id ? "HELD" : "NOT_FOUND");
+          authStatus ?? orderData?.status ?? (args.authorization_id ? "UNKNOWN" : "NOT_FOUND");
 
         const shipmentStatus = trackingMilestone?.status ?? "NOT_FOUND";
         const isDelivered = String(shipmentStatus) === "DELIVERED";
@@ -153,12 +157,11 @@ export function registerCheckSettlementTool(
         const isExpired = authStatus === "EXPIRED";
         const isDenied = authStatus === "DENIED";
 
-        const canCapture = isDelivered && isActiveAuth;
+        const canCapture =
+          isDelivered && isActiveAuth && !isVoided && !isCaptured && !isExpired && !isDenied;
 
         let settlementMessage = "PENDING DELIVERY";
-        if (canCapture) {
-          settlementMessage = "READY FOR CAPTURE";
-        } else if (isCaptured) {
+        if (isCaptured) {
           settlementMessage = "ALREADY CAPTURED / SETTLED";
         } else if (isVoided) {
           settlementMessage = "AUTHORIZATION VOIDED";
@@ -166,6 +169,8 @@ export function registerCheckSettlementTool(
           settlementMessage = "AUTHORIZATION EXPIRED";
         } else if (isDenied) {
           settlementMessage = "AUTHORIZATION DENIED";
+        } else if (canCapture) {
+          settlementMessage = "READY FOR CAPTURE";
         } else if (
           !isActiveAuth &&
           (args.order_id || args.authorization_id) &&

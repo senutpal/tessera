@@ -719,6 +719,112 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
       await server.close();
     });
 
+    it("rejects CheckoutMandate when supplied currency conflicts with signed checkout_jwt cart currency", async () => {
+      const keyPair = generateEd25519KeyPair();
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      const cartJwtPayload = {
+        cart: {
+          total: 100.0,
+          currency: "EUR",
+        },
+      };
+      const validJwt = `header.${Buffer.from(JSON.stringify(cartJwtPayload)).toString("base64url")}.sig`;
+      const checkoutHash = computeCheckoutHash(validJwt);
+
+      const checkoutMandate = {
+        vct: "mandate.checkout.1",
+        checkout_jwt: validJwt,
+        checkout_hash: checkoutHash,
+        iat: nowEpoch,
+        exp: nowEpoch + 3600,
+        nonce: "nonce-curr-mismatch",
+      };
+
+      const signed = signMandate(checkoutMandate, keyPair.privateKey, keyPair.publicKey);
+
+      const server = new TesseraMcpServer();
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_submit_mandate",
+        arguments: {
+          signed_mandate: {
+            mandate: checkoutMandate,
+            signature: signed.signature,
+            signerPublicKey: keyPair.publicKey,
+          },
+          currency: "USD",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = getTextContent(result);
+      expect(text).toContain("Cart currency mismatch");
+      expect(text).toContain("USD");
+      expect(text).toContain("EUR");
+
+      await client.close();
+      await server.close();
+    });
+
+    it("resolves merchant domain to registered PayPal merchant ID when creating escrow order", async () => {
+      const keyPair = generateEd25519KeyPair();
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      let passedPayeeMerchantId: string | undefined;
+
+      const paymentMandate = {
+        vct: "mandate.payment.1",
+        transaction_id: "tx-merchant-registry-check",
+        payee: { id: "staples.com", name: "Staples", website: "https://staples.com" },
+        payment_amount: { amount: 3500, currency: "USD" },
+        payment_instrument: { id: "pi-1", type: "PAYPAL_ESCROW" },
+        iat: nowEpoch,
+        exp: nowEpoch + 3600,
+        nonce: "nonce-merchant-registry",
+      };
+
+      const signedMandate = signMandate(paymentMandate, keyPair.privateKey, keyPair.publicKey);
+
+      const server = new TesseraMcpServer({
+        createEscrowOrderFn: async (opts) => {
+          passedPayeeMerchantId = opts.payee?.merchantId;
+          const money = toMoney(opts.amount);
+          return {
+            orderId: asOrderId("ORDER-REG-01"),
+            status: "CREATED",
+            amount: money,
+            links: [],
+            rawResponse: createMockOrderResponse("ORDER-REG-01"),
+          };
+        },
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_submit_mandate",
+        arguments: {
+          signed_mandate: {
+            mandate: paymentMandate,
+            signature: signedMandate.signature,
+            signerPublicKey: keyPair.publicKey,
+          },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(passedPayeeMerchantId).toBe("MERC-STAPLES-001");
+
+      await client.close();
+      await server.close();
+    });
+
     it("enforces replay protection by default using InMemoryNonceStore", async () => {
       const keyPair = generateEd25519KeyPair();
       const nowEpoch = Math.floor(Date.now() / 1000);
@@ -1273,7 +1379,7 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
                 },
               },
             ],
-          } as any,
+          } as unknown as PayPalOrderResponse,
         }),
         getShipmentTrackingFn: async () => ({
           transactionId: asTransactionId("TX-DELIVERED"),
@@ -1334,6 +1440,111 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
       const text = getTextContent(result);
       expect(text).toContain("ALREADY CAPTURED / SETTLED");
       expect(text).not.toContain("READY FOR CAPTURE");
+
+      await client.close();
+      await server.close();
+    });
+
+    it("reports AUTHORIZATION VOIDED and canCapture false when order status is VOIDED even with authorizationId and delivered milestone", async () => {
+      const server = new TesseraMcpServer({
+        getOrderFn: async (orderId) => ({
+          orderId: asOrderId(orderId),
+          status: "VOIDED",
+          amount: Money.fromDecimalString("100.00", "USD"),
+          authorizationId: asAuthorizationId("AUTH-VOIDED-01"),
+          links: [],
+          rawResponse: createMockOrderResponse(orderId),
+        }),
+        getShipmentTrackingFn: async () => ({
+          transactionId: asTransactionId("TX-DELIVERED-VOID"),
+          trackingNumber: "TRACK-VOID",
+          carrier: "UPS",
+          status: ShipmentMilestoneStatus.DELIVERED,
+          rawStatus: "DELIVERED",
+          trackingNumberValidated: true,
+        }),
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_check_settlement",
+        arguments: { order_id: "ORDER-VOIDED-123", tracking_number: "TRACK-VOID" },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const text = getTextContent(result);
+      expect(text).toContain("AUTHORIZATION VOIDED");
+      expect(text).not.toContain("READY FOR CAPTURE");
+      const structured = result.structuredContent as Record<string, unknown>;
+      expect(structured.canCapture).toBe(false);
+      expect(structured.settlementReady).toBe(false);
+      expect(structured.authorizationStatus).toBe("VOIDED");
+
+      await client.close();
+      await server.close();
+    });
+
+    it("reports AUTHORIZATION EXPIRED and canCapture false when authorization status is EXPIRED", async () => {
+      const server = new TesseraMcpServer({
+        getAuthorizationFn: async (authId) => ({
+          id: authId,
+          status: "EXPIRED",
+        }),
+        getShipmentTrackingFn: async () => ({
+          transactionId: asTransactionId("TX-DELIVERED-EXP"),
+          trackingNumber: "TRACK-EXP",
+          carrier: "UPS",
+          status: ShipmentMilestoneStatus.DELIVERED,
+          rawStatus: "DELIVERED",
+          trackingNumberValidated: true,
+        }),
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_check_settlement",
+        arguments: { authorization_id: "AUTH-EXPIRED-99", tracking_number: "TRACK-EXP" },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const text = getTextContent(result);
+      expect(text).toContain("AUTHORIZATION EXPIRED");
+      expect(text).not.toContain("READY FOR CAPTURE");
+      const structured = result.structuredContent as Record<string, unknown>;
+      expect(structured.canCapture).toBe(false);
+
+      await client.close();
+      await server.close();
+    });
+
+    it("reports escrowStatus UNKNOWN when only authorization_id is supplied and auth status lookup is unavailable", async () => {
+      const server = new TesseraMcpServer();
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_check_settlement",
+        arguments: { authorization_id: "AUTH-UNLOOKED-UP" },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const text = getTextContent(result);
+      expect(text).toContain("Escrow Status:** UNKNOWN");
+      expect(text).not.toContain("Escrow Status:** HELD");
+      const structured = result.structuredContent as Record<string, unknown>;
+      expect(structured.escrowStatus).toBe("UNKNOWN");
+      expect(structured.canCapture).toBe(false);
 
       await client.close();
       await server.close();

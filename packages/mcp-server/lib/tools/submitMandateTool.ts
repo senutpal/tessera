@@ -19,6 +19,7 @@ import {
 } from "@tessera/paypal";
 import type { PolicyEngine } from "@tessera/policy";
 import { z } from "zod";
+import { DEFAULT_MERCHANT_REGISTRY } from "../orchestrator/agentProcurementLoop.js";
 
 function extractCartAmountFromJwt(
   jwt: string,
@@ -42,8 +43,12 @@ function extractCartAmountFromJwt(
     if (typeof candidate === "object" && candidate !== null) {
       const candObj = candidate as Record<string, unknown>;
       if (typeof candObj.amount === "number") {
+        const amt =
+          Number.isInteger(candObj.amount) && candObj.amount >= 100
+            ? candObj.amount / 100
+            : candObj.amount;
         return {
-          amount: candObj.amount / 100,
+          amount: amt,
           currency: typeof candObj.currency === "string" ? candObj.currency : undefined,
         };
       }
@@ -348,7 +353,22 @@ export function registerSubmitMandateTool(server: McpServer, context: SubmitMand
                 };
               }
             }
-            const currency = (args.currency ?? signedCart.currency ?? "USD").toUpperCase();
+            if (
+              args.currency &&
+              signedCart.currency &&
+              args.currency.toUpperCase() !== signedCart.currency.toUpperCase()
+            ) {
+              return {
+                isError: true,
+                content: [
+                  {
+                    type: "text" as const,
+                    text: `Cart currency mismatch: supplied currency (${args.currency.toUpperCase()}) does not match signed checkout_jwt cart currency (${signedCart.currency.toUpperCase()}).`,
+                  },
+                ],
+              };
+            }
+            const currency = (signedCart.currency ?? args.currency ?? "USD").toUpperCase();
             money = Money.fromDecimalString(signedCart.amount.toFixed(2), currency);
           } else if (args.amount !== undefined) {
             money = Money.fromDecimalString(
@@ -380,6 +400,11 @@ export function registerSubmitMandateTool(server: McpServer, context: SubmitMand
           context.paypalClient ??
           (context.paypalConfig ? new PayPalClient(context.paypalConfig) : undefined);
 
+        const resolvedPayeeMerchantId =
+          payeeId && DEFAULT_MERCHANT_REGISTRY[payeeId]
+            ? DEFAULT_MERCHANT_REGISTRY[payeeId]
+            : payeeId;
+
         let escrowOrder: EscrowOrder;
         if (context.createEscrowOrderFn) {
           escrowOrder = await context.createEscrowOrderFn({
@@ -387,7 +412,7 @@ export function registerSubmitMandateTool(server: McpServer, context: SubmitMand
             description: args.description ?? "Tessera Autonomous AP2 Escrow Order",
             customId,
             referenceId: customId ?? "tessera-mandate-ref",
-            payee: payeeId ? { merchantId: payeeId } : undefined,
+            payee: resolvedPayeeMerchantId ? { merchantId: resolvedPayeeMerchantId } : undefined,
           });
         } else if (paypalClient) {
           escrowOrder = await paypalClient.createEscrowOrder({
@@ -395,7 +420,7 @@ export function registerSubmitMandateTool(server: McpServer, context: SubmitMand
             description: args.description ?? "Tessera Autonomous AP2 Escrow Order",
             customId,
             referenceId: customId ?? "tessera-mandate-ref",
-            payee: payeeId ? { merchantId: payeeId } : undefined,
+            payee: resolvedPayeeMerchantId ? { merchantId: resolvedPayeeMerchantId } : undefined,
           });
         } else {
           return {
