@@ -133,6 +133,7 @@ export const SubmitMandateInputShape = {
   merchant_id: z.string().optional().describe("Payee or merchant identifier"),
   description: z.string().optional().describe("Escrow order description"),
   custom_id: z.string().optional().describe("Tracking or correlation ID"),
+  transaction_id: z.string().optional().describe("Transaction correlation ID"),
 };
 
 export const SubmitMandateInputSchema = z.object(SubmitMandateInputShape);
@@ -251,17 +252,58 @@ export function registerSubmitMandateTool(server: McpServer, context: SubmitMand
         // 3. Extract monetary amount from verified mandate
         let money: Money;
         let payeeId = args.merchant_id;
-        let customId = args.custom_id;
+        let customId = args.custom_id ?? args.transaction_id;
 
         if (isPaymentMandate) {
           const pm = verifiedMandate as PaymentMandate;
           money = amountToMoney(pm.payment_amount);
-          if (!payeeId && pm.payee?.id) {
-            payeeId = pm.payee.id;
+
+          const signedPayeeId = pm.payee?.id;
+          if (
+            args.merchant_id !== undefined &&
+            signedPayeeId &&
+            args.merchant_id !== signedPayeeId
+          ) {
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text" as const,
+                  text: `Merchant ID conflict: supplied merchant_id "${args.merchant_id}" conflicts with signed mandate payee ID "${signedPayeeId}".`,
+                },
+              ],
+            };
           }
-          if (!customId && pm.transaction_id) {
-            customId = pm.transaction_id;
+          payeeId = signedPayeeId ?? args.merchant_id;
+
+          const signedTxId = pm.transaction_id;
+          if (args.custom_id !== undefined && signedTxId && args.custom_id !== signedTxId) {
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text" as const,
+                  text: `Correlation ID conflict: supplied custom_id "${args.custom_id}" conflicts with signed mandate transaction_id "${signedTxId}".`,
+                },
+              ],
+            };
           }
+          if (
+            args.transaction_id !== undefined &&
+            signedTxId &&
+            args.transaction_id !== signedTxId
+          ) {
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text" as const,
+                  text: `Transaction ID conflict: supplied transaction_id "${args.transaction_id}" conflicts with signed mandate transaction_id "${signedTxId}".`,
+                },
+              ],
+            };
+          }
+          customId = signedTxId ?? args.custom_id ?? args.transaction_id;
         } else {
           const checkoutJwt =
             typeof (verifiedMandate as { checkout_jwt?: unknown }).checkout_jwt === "string"

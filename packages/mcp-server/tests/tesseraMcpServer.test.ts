@@ -912,6 +912,91 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
       await client.close();
       await server.close();
     });
+
+    it("rejects PaymentMandate when caller-supplied merchant_id conflicts with signed payee ID", async () => {
+      const keyPair = generateEd25519KeyPair();
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      const paymentMandate = {
+        vct: "mandate.payment.1",
+        transaction_id: "tx-payee-conflict",
+        payee: { id: "legit-store.com", name: "Legit Store", website: "https://legit-store.com" },
+        payment_amount: { amount: 5000, currency: "USD" },
+        payment_instrument: { id: "pi-1", type: "PAYPAL_ESCROW" },
+        iat: nowEpoch,
+        exp: nowEpoch + 3600,
+        nonce: "nonce-payee-conflict",
+      };
+
+      const signed = signMandate(paymentMandate, keyPair.privateKey, keyPair.publicKey);
+
+      const server = new TesseraMcpServer();
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_submit_mandate",
+        arguments: {
+          signed_mandate: {
+            mandate: paymentMandate,
+            signature: signed.signature,
+            signerPublicKey: keyPair.publicKey,
+          },
+          merchant_id: "attacker-store.com",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = getTextContent(result);
+      expect(text).toContain("Merchant ID conflict");
+      expect(text).toContain("attacker-store.com");
+
+      await client.close();
+      await server.close();
+    });
+
+    it("rejects PaymentMandate when caller-supplied custom_id or transaction_id conflicts with signed transaction_id", async () => {
+      const keyPair = generateEd25519KeyPair();
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      const paymentMandate = {
+        vct: "mandate.payment.1",
+        transaction_id: "tx-signed-12345",
+        payee: { id: "store.com", name: "Store", website: "https://store.com" },
+        payment_amount: { amount: 5000, currency: "USD" },
+        payment_instrument: { id: "pi-1", type: "PAYPAL_ESCROW" },
+        iat: nowEpoch,
+        exp: nowEpoch + 3600,
+        nonce: "nonce-txid-conflict",
+      };
+
+      const signed = signMandate(paymentMandate, keyPair.privateKey, keyPair.publicKey);
+
+      const server = new TesseraMcpServer();
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_submit_mandate",
+        arguments: {
+          signed_mandate: {
+            mandate: paymentMandate,
+            signature: signed.signature,
+            signerPublicKey: keyPair.publicKey,
+          },
+          custom_id: "tx-override-67890",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = getTextContent(result);
+      expect(text).toContain("Correlation ID conflict");
+
+      await client.close();
+      await server.close();
+    });
   });
 
   describe("tessera_check_settlement", () => {
