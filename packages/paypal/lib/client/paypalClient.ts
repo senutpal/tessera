@@ -106,6 +106,18 @@ export class PayPalClient {
   }
 
   /**
+   * Fetches authorization status and details by authorization ID.
+   */
+  public async getAuthorization(authorizationId: string): Promise<{
+    id: string;
+    status: string;
+    amount?: { currency_code: string; value: string } | undefined;
+    rawResponse?: Record<string, unknown> | undefined;
+  }> {
+    return this.voids.getAuthorization(authorizationId);
+  }
+
+  /**
    * Fetches the current state of an order by ID.
    */
   public async getOrder(orderId: string): Promise<EscrowOrder> {

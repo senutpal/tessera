@@ -786,6 +786,97 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
       await client.close();
       await server.close();
     });
+
+    it("reports READY FOR CAPTURE when order status is COMPLETED but nested authorization status is CREATED", async () => {
+      const server = new TesseraMcpServer({
+        getOrderFn: async (orderId) => ({
+          orderId: asOrderId(orderId),
+          status: "COMPLETED", // PayPal order status is COMPLETED after AUTHORIZE intent succeeds
+          amount: Money.fromDecimalString("100.00", "USD"),
+          authorizationId: asAuthorizationId("AUTH-ACTIVE-01"),
+          links: [],
+          rawResponse: {
+            id: orderId,
+            status: "COMPLETED",
+            intent: "AUTHORIZE",
+            purchase_units: [
+              {
+                payments: {
+                  authorizations: [
+                    {
+                      id: "AUTH-ACTIVE-01",
+                      status: "CREATED",
+                      amount: { currency_code: "USD", value: "100.00" },
+                    },
+                  ],
+                },
+              },
+            ],
+          } as any,
+        }),
+        getShipmentTrackingFn: async () => ({
+          transactionId: asTransactionId("TX-DELIVERED"),
+          trackingNumber: "TRACK-DELIVERED",
+          carrier: "UPS",
+          status: ShipmentMilestoneStatus.DELIVERED,
+          rawStatus: "DELIVERED",
+          trackingNumberValidated: true,
+        }),
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_check_settlement",
+        arguments: { order_id: "ORDER-COMPLETED-WITH-ACTIVE-AUTH" },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const text = getTextContent(result);
+      expect(text).toContain("READY FOR CAPTURE");
+      expect(text).not.toContain("ALREADY CAPTURED / SETTLED");
+
+      await client.close();
+      await server.close();
+    });
+
+    it("reports ALREADY CAPTURED / SETTLED when authorization status is CAPTURED", async () => {
+      const server = new TesseraMcpServer({
+        getAuthorizationFn: async (authId) => ({
+          id: authId,
+          status: "CAPTURED",
+        }),
+        getShipmentTrackingFn: async () => ({
+          transactionId: asTransactionId("TX-DELIVERED"),
+          trackingNumber: "TRACK-DELIVERED",
+          carrier: "UPS",
+          status: ShipmentMilestoneStatus.DELIVERED,
+          rawStatus: "DELIVERED",
+          trackingNumberValidated: true,
+        }),
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_check_settlement",
+        arguments: { authorization_id: "AUTH-CAPTURED-99" },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const text = getTextContent(result);
+      expect(text).toContain("ALREADY CAPTURED / SETTLED");
+      expect(text).not.toContain("READY FOR CAPTURE");
+
+      await client.close();
+      await server.close();
+    });
   });
 
   describe("Server Factory & Transports", () => {
