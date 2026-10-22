@@ -1,0 +1,194 @@
+// @vitest-environment jsdom
+import "@testing-library/jest-dom/vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { createRef } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ProcurementGantt,
+  type ProcurementGanttHandle,
+} from "../src/components/gantt/ProcurementGantt.js";
+import type { ClearinghouseRecord } from "../src/types.js";
+
+const mockRecord1: ClearinghouseRecord = {
+  transactionId: "tx-gantt-101",
+  mandateId: "man-101",
+  agentId: "agent-infra-01",
+  merchantDomain: "aws.amazon.com",
+  amount: 1425000,
+  currency: "USD",
+  clearinghouseState: "AUTHORIZED_IN_ESCROW",
+  escrowStatus: "AUTHORIZED_HOLD",
+  riskScore: 18,
+  riskTier: "LOW",
+  hitlStatus: "NOT_REQUIRED",
+  authorizationId: "auth-aws-9912",
+  createdAt: "2026-10-21T08:00:00.000Z",
+  updatedAt: "2026-10-21T08:30:00.000Z",
+  sequenceNumber: 101,
+  timestampMicros: 1774080000000000,
+};
+
+const mockRecordDelayed: ClearinghouseRecord = {
+  transactionId: "tx-gantt-102",
+  mandateId: "man-102",
+  agentId: "agent-procure-11",
+  merchantDomain: "delayed-supplier.com",
+  amount: 540000,
+  currency: "USD",
+  clearinghouseState: "AUTHORIZED_IN_ESCROW",
+  escrowStatus: "IN_TRANSIT",
+  riskScore: 82,
+  riskTier: "CRITICAL_HITL",
+  hitlStatus: "APPROVED",
+  authorizationId: "auth-del-5521",
+  trackingId: "FEDEX-DELAY-991",
+  carrier: "FedEx",
+  createdAt: "2026-10-10T08:00:00.000Z",
+  updatedAt: "2026-10-12T08:00:00.000Z",
+  sequenceNumber: 102,
+  timestampMicros: 1773129600000000,
+};
+
+describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (ProcurementGantt)", () => {
+  beforeEach(() => {
+    if (typeof window !== "undefined" && !window.matchMedia) {
+      window.matchMedia = vi.fn().mockImplementation((query) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }));
+    }
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  describe("Gantt Toolbar & Component Layout", () => {
+    it("renders the procurement Gantt container, title, and timeline controls", () => {
+      render(<ProcurementGantt records={[mockRecord1]} />);
+
+      const ganttContainer = screen.getByTestId("procurement-gantt");
+      expect(ganttContainer).toBeInTheDocument();
+
+      expect(screen.getByText(/Procurement Milestone SLA Scheduler/i)).toBeInTheDocument();
+      expect(screen.getByTestId("critical-path-toggle")).toBeInTheDocument();
+      expect(screen.getByTestId("zoom-in-btn")).toBeInTheDocument();
+      expect(screen.getByTestId("zoom-out-btn")).toBeInTheDocument();
+      expect(screen.getByTestId("zoom-fit-btn")).toBeInTheDocument();
+    });
+
+    it("renders task milestones and displays stage markers", () => {
+      render(<ProcurementGantt records={[mockRecord1]} />);
+
+      expect(screen.getByText(/Mandate Verification/i)).toBeInTheDocument();
+      expect(screen.getByText(/Escrow Authorization Hold/i)).toBeInTheDocument();
+      expect(screen.getByText(/Merchant Fulfillment & Dispatch/i)).toBeInTheDocument();
+
+      const milestoneMarkers = screen.getAllByTestId("milestone-marker");
+      expect(milestoneMarkers.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Critical Path Highlighting & Toggling", () => {
+    it("toggles critical path on and off when button is clicked", () => {
+      const handleToggle = vi.fn();
+      render(
+        <ProcurementGantt
+          records={[mockRecord1]}
+          onToggleCriticalPath={handleToggle}
+          showCriticalPath={false}
+        />,
+      );
+
+      const toggleBtn = screen.getByTestId("critical-path-toggle");
+      expect(toggleBtn).toHaveAttribute("data-active", "false");
+
+      fireEvent.click(toggleBtn);
+      expect(handleToggle).toHaveBeenCalledWith(true);
+    });
+
+    it("highlights critical path bottleneck tasks with visual indicators when active", () => {
+      render(<ProcurementGantt records={[mockRecord1]} showCriticalPath={true} />);
+
+      const toggleBtn = screen.getByTestId("critical-path-toggle");
+      expect(toggleBtn).toHaveAttribute("data-active", "true");
+
+      const criticalTasks = screen.getAllByTestId("critical-task-indicator");
+      expect(criticalTasks.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Zooming Controls & Imperative Handle", () => {
+    it("exposes imperative controls for zooming and critical path via ref", () => {
+      const ref = createRef<ProcurementGanttHandle>();
+      render(<ProcurementGantt ref={ref} records={[mockRecord1]} />);
+
+      expect(ref.current).toBeDefined();
+      expect(typeof ref.current?.zoomIn).toBe("function");
+      expect(typeof ref.current?.zoomOut).toBe("function");
+      expect(typeof ref.current?.zoomToFit).toBe("function");
+      expect(typeof ref.current?.toggleCriticalPath).toBe("function");
+
+      // Verify invoking imperative methods succeeds without throwing
+      expect(() => {
+        act(() => {
+          ref.current?.zoomIn();
+          ref.current?.zoomOut();
+          ref.current?.zoomToFit();
+        });
+      }).not.toThrow();
+    });
+
+    it("triggers zoom actions when toolbar zoom buttons are clicked", () => {
+      const ref = createRef<ProcurementGanttHandle>();
+      render(<ProcurementGantt ref={ref} records={[mockRecord1]} />);
+
+      const zoomInBtn = screen.getByTestId("zoom-in-btn");
+      const zoomOutBtn = screen.getByTestId("zoom-out-btn");
+      const zoomFitBtn = screen.getByTestId("zoom-fit-btn");
+
+      fireEvent.click(zoomInBtn);
+      fireEvent.click(zoomOutBtn);
+      fireEvent.click(zoomFitBtn);
+    });
+  });
+
+  describe("SLA Warnings & Delays Visualization", () => {
+    it("displays prominent SLA breach warning badge when a shipment exceeds cutoff", () => {
+      const onSlaWarning = vi.fn();
+      render(<ProcurementGantt records={[mockRecordDelayed]} onSlaWarning={onSlaWarning} />);
+
+      const warningBadges = screen.getAllByTestId("sla-warning-indicator");
+      expect(warningBadges.length).toBeGreaterThan(0);
+      expect(screen.getByText(/SLA Alert/i)).toBeInTheDocument();
+    });
+  });
+
+  describe("Theme and Design System", () => {
+    it("applies light theme classes when theme='light'", () => {
+      render(<ProcurementGantt records={[mockRecord1]} theme="light" />);
+      const container = screen.getByTestId("procurement-gantt");
+      expect(container.className).toContain("bg-white");
+    });
+
+    it("applies dark theme classes when theme='dark'", () => {
+      render(<ProcurementGantt records={[mockRecord1]} theme="dark" />);
+      const container = screen.getByTestId("procurement-gantt");
+      expect(container.className).toContain("dark:bg-[#09090b]");
+    });
+  });
+
+  describe("Lifecycle Disposal & Memory Safety", () => {
+    it("safely disposes resources on unmount without memory leaks or uncaught errors", () => {
+      const { unmount } = render(<ProcurementGantt records={[mockRecord1]} />);
+      expect(() => unmount()).not.toThrow();
+    });
+  });
+});

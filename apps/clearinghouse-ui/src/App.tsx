@@ -3,6 +3,7 @@ import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ClearinghouseGrid, type ClearinghouseGridHandle } from "./components/ClearinghouseGrid.js";
+import { ProcurementGantt } from "./components/gantt/ProcurementGantt.js";
 import { TransactionDetailDrawer } from "./components/TransactionDetailDrawer.js";
 import { INITIAL_DEMO_RECORDS } from "./demoData.js";
 import { useClearinghouseSocket } from "./hooks/useClearinghouseSocket.js";
@@ -14,6 +15,7 @@ export const App: React.FC = () => {
   const statsRafRef = useRef<number | null>(null);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [simulationActive, setSimulationActive] = useState<boolean>(false);
+  const [viewMode, setViewMode] = useState<"ledger" | "gantt">("ledger");
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [selectedRecord, setSelectedRecord] = useState<ClearinghouseRecord | null>(null);
   const simTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -450,6 +452,34 @@ export const App: React.FC = () => {
               : "Connect WS"}
           </button>
 
+          {/* View Mode Toggle: AG Grid Ledger / Bryntum Gantt Timeline */}
+          <div className="flex items-center rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/60 p-0.5 shadow-sm text-xs font-mono">
+            <button
+              type="button"
+              data-testid="view-mode-ledger"
+              onClick={() => setViewMode("ledger")}
+              className={`px-2.5 py-1 rounded-md transition-colors ${
+                viewMode === "ledger"
+                  ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-semibold shadow-xs"
+                  : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
+            >
+              Ledger
+            </button>
+            <button
+              type="button"
+              data-testid="view-mode-gantt"
+              onClick={() => setViewMode("gantt")}
+              className={`px-2.5 py-1 rounded-md transition-colors ${
+                viewMode === "gantt"
+                  ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-semibold shadow-xs"
+                  : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
+            >
+              Gantt SLA
+            </button>
+          </div>
+
           {/* Theme Switcher Toggle */}
           <button
             type="button"
@@ -631,19 +661,32 @@ export const App: React.FC = () => {
         </div>
       </section>
 
-      {/* Primary AG Grid Enterprise Ledger View */}
+      {/* Primary AG Grid Enterprise Ledger View or Bryntum Gantt Pro Timeline */}
       <main className="flex-1 px-6 pb-6 flex flex-col">
-        <ClearinghouseGrid
-          ref={gridRef}
-          rowData={initialRowData}
-          apiBaseUrl={apiBaseUrl}
-          theme={theme}
-          onApprove={handleApprove}
-          onVoid={handleVoid}
-          onDispute={handleDispute}
-          onRowClicked={(record) => setSelectedRecord(record)}
-          className="w-full h-[660px]"
-        />
+        {viewMode === "ledger" ? (
+          <ClearinghouseGrid
+            ref={gridRef}
+            rowData={initialRowData}
+            apiBaseUrl={apiBaseUrl}
+            theme={theme}
+            onApprove={handleApprove}
+            onVoid={handleVoid}
+            onDispute={handleDispute}
+            onRowClicked={(record) => setSelectedRecord(record)}
+            className="w-full h-[660px]"
+          />
+        ) : (
+          <ProcurementGantt
+            records={Array.from(recordsRef.current.values())}
+            theme={theme}
+            showCriticalPath={true}
+            onTaskClick={(task) => {
+              const rec = recordsRef.current.get(task.transactionId);
+              if (rec) setSelectedRecord(rec);
+            }}
+            className="w-full flex-1 min-h-[660px]"
+          />
+        )}
       </main>
 
       {/* Slide-Out Inspector Drawer for Selected Transaction */}

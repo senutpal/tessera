@@ -1,5 +1,5 @@
 // Public entry point for @tessera/clearinghouse-ui
-// AG Grid Enterprise Financial Clearinghouse Dashboard and HITL Supervisor Controls
+// AG Grid Enterprise Financial Clearinghouse Dashboard and Bryntum Gantt Pro Procurement SLA Scheduler
 
 export {
   ClearinghouseGrid,
@@ -8,6 +8,30 @@ export {
   computeAuditBundleDigest,
   generateAuditBundle,
 } from "./components/ClearinghouseGrid.js";
+export {
+  calculateCriticalPath,
+  computeBaselineComparison,
+  mapRecordsToGanttProject,
+  mapRecordToGanttDependencies,
+  mapRecordToGanttProject,
+  mapRecordToGanttTasks,
+} from "./components/gantt/ganttDataMapper.js";
+// Bryntum Gantt Pro Components & Transformers
+export {
+  ProcurementGantt,
+  type ProcurementGanttHandle,
+  type ProcurementGanttProps,
+} from "./components/gantt/ProcurementGantt.js";
+export {
+  createSlaMonitor,
+  evaluateGanttTasksSla,
+  evaluateRecordSla,
+  getWarningBadgeHtml,
+  getWarningIconCls,
+  SLA_THRESHOLDS,
+  SlaMonitor,
+  type SlaWarningListener,
+} from "./components/gantt/slaMonitor.js";
 export {
   ActionCellRenderer,
   type ActionCellRendererProps,
@@ -26,7 +50,23 @@ export {
 } from "./components/TransactionDetailDrawer.js";
 
 export { useClearinghouseSocket } from "./hooks/useClearinghouseSocket.js";
-
+export {
+  BryntumDependencyType,
+  type CarrierTrackingStatus,
+  type GanttBaseline,
+  type GanttMapperOptions,
+  type GanttTaskStatus,
+  PROCUREMENT_STAGES,
+  type ProcurementGanttDependency,
+  type ProcurementGanttProjectData,
+  type ProcurementGanttTask,
+  type ProcurementStage,
+  type SlaDelayWarning,
+  type SlaEvaluationResult,
+  type SlaSeverity,
+  STAGE_DEFINITIONS,
+  type StageDefinition,
+} from "./types/gantt.js";
 export {
   type ClearinghouseAuditBundle,
   type ClearinghouseRecord,
