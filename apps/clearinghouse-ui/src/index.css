@@ -234,6 +234,21 @@ body {
   outline: none;
 }
 
+/* Base Bryntum Gantt Transition Stabilization: eliminate sliding/jitter on live streaming ticks */
+.b-gantt,
+.b-gantt-host {
+  --b-default-transition-duration: 0s;
+  --b-baseline-transition-duration: 0s;
+}
+
+.b-gantt .b-gantt-task-wrap,
+.b-gantt .b-gantt-task,
+.b-gantt .b-sch-event-wrap,
+.b-gantt .b-sch-event,
+.b-gantt .b-gantt-task-bar {
+  transition: none;
+}
+
 /* Bryntum Gantt Dark Theme: Tessera Obsidian Financial Palette */
 .b-theme-stockholm-dark,
 .dark .b-gantt,
@@ -261,6 +276,10 @@ body {
   --b-tooltip-rich-background: #0f0f13;
   --b-tooltip-plain-background: #0f0f13;
   --b-splitter-color: #27272a;
+  --b-baseline-background: #27272a;
+  --b-baseline-border-color: #3f3f46;
+  --b-dependency-color: #71717a;
+  --b-dependency-selected-color: #f4f4f5;
   --b-neutral-100: #09090b;
   --b-neutral-98: #0c0c0e;
   --b-neutral-95: #0e0e11;
@@ -367,4 +386,27 @@ body {
 
 .dark .b-sch-non-working-time {
   background-color: rgba(255, 255, 255, 0.02);
+}
+
+/* Virtual scroller and dark scrollbar tracks */
+.dark .b-virtual-scroller {
+  background-color: #09090b;
+}
+
+.dark .b-gantt ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dark .b-gantt ::-webkit-scrollbar-track {
+  background: #09090b;
+}
+
+.dark .b-gantt ::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 4px;
+}
+
+.dark .b-gantt ::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
 }

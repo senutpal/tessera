@@ -312,14 +312,22 @@ describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (Procurement
   });
 
   describe("Live Streaming Stabilization & Jitter Prevention", () => {
-    it("configures transitionDuration: 0 and disables projectLines in ganttConfig to eliminate flickering", () => {
+    it("configures transitionDuration: 0, disables event animations, stabilizes time axis, and syncs inline data to eliminate flickering", () => {
       let capturedConfig:
         | {
             transitionDuration?: number;
+            enableEventAnimations?: boolean;
+            useInitialAnimation?: boolean;
+            autoAdjustTimeAxis?: boolean;
             cls?: string;
+            project?: {
+              syncDataOnLoad?: boolean;
+              silenceInitialCommit?: boolean;
+            };
             features?: {
               projectLines?: { disabled: boolean };
               criticalPaths?: { disabled: boolean };
+              nonWorkingTime?: { disabled: boolean };
             };
           }
         | undefined;
@@ -338,7 +346,13 @@ describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (Procurement
 
       expect(capturedConfig).toBeDefined();
       expect(capturedConfig?.transitionDuration).toBe(0);
+      expect(capturedConfig?.enableEventAnimations).toBe(false);
+      expect(capturedConfig?.useInitialAnimation).toBe(false);
+      expect(capturedConfig?.autoAdjustTimeAxis).toBe(false);
       expect(capturedConfig?.features?.projectLines?.disabled).toBe(true);
+      expect(capturedConfig?.features?.nonWorkingTime?.disabled).toBe(true);
+      expect(capturedConfig?.project?.syncDataOnLoad).toBe(true);
+      expect(capturedConfig?.project?.silenceInitialCommit).toBe(true);
       expect(capturedConfig?.cls).toContain("b-theme-stockholm-dark dark");
     });
 

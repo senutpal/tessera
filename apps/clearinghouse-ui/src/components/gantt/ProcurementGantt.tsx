@@ -241,10 +241,14 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
                 loadInlineData?: (data: Record<string, unknown>) => Promise<unknown>;
                 tasksData?: unknown;
                 dependenciesData?: unknown;
+                syncDataOnLoad?: boolean;
               }
             | undefined;
           if (project) {
             try {
+              if (project.syncDataOnLoad === undefined) {
+                project.syncDataOnLoad = true;
+              }
               if (typeof project.loadInlineData === "function") {
                 void project
                   .loadInlineData({
@@ -302,12 +306,16 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
             appendTo: ganttContainerRef.current,
             autoHeight: true,
             transitionDuration: 0,
+            enableEventAnimations: false,
+            useInitialAnimation: false,
+            autoAdjustTimeAxis: false,
             cls: theme === "dark" ? "b-theme-stockholm-dark dark" : "b-theme-stockholm-light",
             features: {
               criticalPaths: { disabled: !isCriticalPathActive },
               baselines: { disabled: false },
               dependencies: { disabled: false },
               projectLines: { disabled: true },
+              nonWorkingTime: { disabled: true },
               taskTooltip: {
                 template: (data?: {
                   taskRecord?:
@@ -338,6 +346,9 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
             project: {
               tasksData: projectData.tasksData,
               dependenciesData: projectData.dependenciesData,
+              syncDataOnLoad: true,
+              silenceInitialCommit: true,
+              autoCalculatePercentDoneForParentTasks: false,
             },
           };
 
@@ -378,9 +389,13 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
               loadInlineData?: (data: Record<string, unknown>) => Promise<unknown>;
               tasksData?: unknown;
               dependenciesData?: unknown;
+              syncDataOnLoad?: boolean;
             }
           | undefined;
         if (project) {
+          if (project.syncDataOnLoad === undefined) {
+            project.syncDataOnLoad = true;
+          }
           if (typeof project.loadInlineData === "function") {
             void project
               .loadInlineData({
