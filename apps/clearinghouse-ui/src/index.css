@@ -1,5 +1,7 @@
 @import "ag-grid-community/styles/ag-grid.css";
 @import "ag-grid-community/styles/ag-theme-quartz.css";
+@import "@bryntum/gantt/gantt.css";
+@import "@bryntum/gantt/stockholm-light.css";
 
 /* biome-ignore lint/suspicious/noUnknownAtRules: tailwind directive */
 @tailwind base;

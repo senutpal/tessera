@@ -123,6 +123,7 @@ export function evaluateGanttTasksSla(
         const status = task.carrierStatus;
 
         if (status === "DELIVERY_DELAYED") {
+          const delay = Math.max(1, elapsedHours > 48 ? elapsedHours - 48 : 24);
           warnings.push({
             id: `warn-carrier-delay-${task.transactionId}`,
             transactionId: task.transactionId,
@@ -131,7 +132,7 @@ export function evaluateGanttTasksSla(
             message: `Carrier reported delivery delay: shipment in transit experiencing courier delays (${task.carrier || "Carrier"})`,
             allocatedDurationHours: SLA_THRESHOLDS.IN_TRANSIT_CUTOFF_HOURS,
             actualDurationHours: elapsedHours,
-            delayHours: Math.max(0, elapsedHours - 48),
+            delayHours: delay,
             carrierStatus: status,
             carrier: task.carrier,
             trackingId: task.trackingId,
@@ -139,6 +140,7 @@ export function evaluateGanttTasksSla(
             actionRecommended: "NOTIFY_BUYER",
           });
         } else if (status === "ON_HOLD") {
+          const delay = Math.max(1, elapsedHours > 48 ? elapsedHours - 48 : 24);
           warnings.push({
             id: `warn-carrier-hold-${task.transactionId}`,
             transactionId: task.transactionId,
@@ -147,7 +149,7 @@ export function evaluateGanttTasksSla(
             message: `Shipment placed on hold by carrier ${task.carrier || "carrier"} (customs/weather/exception)`,
             allocatedDurationHours: SLA_THRESHOLDS.IN_TRANSIT_CUTOFF_HOURS,
             actualDurationHours: elapsedHours,
-            delayHours: Math.max(0, elapsedHours - 48),
+            delayHours: delay,
             carrierStatus: status,
             carrier: task.carrier,
             trackingId: task.trackingId,
@@ -163,7 +165,7 @@ export function evaluateGanttTasksSla(
             message: `Carrier pickup failed for tracking ID ${task.trackingId || "unknown"}`,
             allocatedDurationHours: SLA_THRESHOLDS.IN_TRANSIT_CUTOFF_HOURS,
             actualDurationHours: elapsedHours,
-            delayHours: 0,
+            delayHours: Math.max(1, elapsedHours > 24 ? elapsedHours - 24 : 12),
             carrierStatus: status,
             carrier: task.carrier,
             trackingId: task.trackingId,
@@ -179,7 +181,7 @@ export function evaluateGanttTasksSla(
             message: `Carrier delivery error reported for shipment ${task.trackingId || "unknown"}`,
             allocatedDurationHours: SLA_THRESHOLDS.IN_TRANSIT_CUTOFF_HOURS,
             actualDurationHours: elapsedHours,
-            delayHours: elapsedHours,
+            delayHours: Math.max(1, elapsedHours),
             carrierStatus: status,
             carrier: task.carrier,
             trackingId: task.trackingId,
@@ -195,7 +197,23 @@ export function evaluateGanttTasksSla(
             message: `Shipment returned or in return to merchant for tracking ID ${task.trackingId || "unknown"}`,
             allocatedDurationHours: SLA_THRESHOLDS.IN_TRANSIT_CUTOFF_HOURS,
             actualDurationHours: elapsedHours,
-            delayHours: elapsedHours,
+            delayHours: Math.max(1, elapsedHours),
+            carrierStatus: status,
+            carrier: task.carrier,
+            trackingId: task.trackingId,
+            timestamp: now.toISOString(),
+            actionRecommended: "STAGE_PAYPAL_DISPUTE",
+          });
+        } else if (status === "CANCELLED" || status === "VOID") {
+          warnings.push({
+            id: `warn-carrier-cancelled-${task.transactionId}`,
+            transactionId: task.transactionId,
+            stage: "IN_TRANSIT",
+            severity: "CRITICAL",
+            message: `Shipment tracking was cancelled by carrier for tracking ID ${task.trackingId || "unknown"}`,
+            allocatedDurationHours: SLA_THRESHOLDS.IN_TRANSIT_CUTOFF_HOURS,
+            actualDurationHours: elapsedHours,
+            delayHours: Math.max(1, elapsedHours),
             carrierStatus: status,
             carrier: task.carrier,
             trackingId: task.trackingId,

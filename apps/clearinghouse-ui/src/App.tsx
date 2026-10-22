@@ -684,6 +684,11 @@ export const App: React.FC = () => {
               const rec = recordsRef.current.get(task.transactionId);
               if (rec) setSelectedRecord(rec);
             }}
+            onSlaWarning={(warning) => {
+              if (warning.severity === "CRITICAL") {
+                showToast(`SLA CRITICAL: ${warning.message}`);
+              }
+            }}
             className="w-full flex-1 min-h-[660px]"
           />
         )}

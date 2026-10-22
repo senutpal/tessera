@@ -190,5 +190,84 @@ describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (Procurement
       const { unmount } = render(<ProcurementGantt records={[mockRecord1]} />);
       expect(() => unmount()).not.toThrow();
     });
+
+    it("wires imperative handle directly to the active Bryntum Gantt instance", () => {
+      const mockDestroy = vi.fn();
+      const mockZoomIn = vi.fn();
+      const mockZoomOut = vi.fn();
+      const mockZoomToFit = vi.fn();
+      const mockFeatures = {
+        criticalPaths: { disabled: true },
+        baselines: { disabled: false },
+        dependencies: { disabled: false },
+      };
+      const mockProject = {
+        tasksData: [],
+        dependenciesData: [],
+      };
+
+      const mockGanttInstance = {
+        destroy: mockDestroy,
+        isDestroyed: false,
+        zoomIn: mockZoomIn,
+        zoomOut: mockZoomOut,
+        zoomToFit: mockZoomToFit,
+        features: mockFeatures,
+        project: mockProject,
+      };
+
+      const factory = vi.fn().mockReturnValue(mockGanttInstance);
+
+      const ref = createRef<ProcurementGanttHandle>();
+      const { unmount, rerender } = render(
+        <ProcurementGantt ref={ref} records={[mockRecord1]} ganttInstanceFactory={factory} />,
+      );
+
+      expect(factory).toHaveBeenCalled();
+      expect(ref.current?.getGanttInstance()).toBe(mockGanttInstance);
+
+      act(() => {
+        ref.current?.zoomIn();
+        ref.current?.zoomOut();
+        ref.current?.zoomToFit();
+        ref.current?.toggleCriticalPath();
+        ref.current?.refreshData();
+      });
+
+      expect(mockZoomIn).toHaveBeenCalledTimes(1);
+      expect(mockZoomOut).toHaveBeenCalledTimes(1);
+      expect(mockZoomToFit).toHaveBeenCalledTimes(1);
+
+      // Verify that re-rendering with new records DOES NOT call destroy
+      rerender(
+        <ProcurementGantt
+          ref={ref}
+          records={[mockRecord1, mockRecordDelayed]}
+          ganttInstanceFactory={factory}
+        />,
+      );
+      expect(mockDestroy).not.toHaveBeenCalled();
+
+      // Verify destroy is ONLY called on unmount
+      unmount();
+      expect(mockDestroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("renders Show More Orders pagination button when records exceed maxVisibleRecords", () => {
+      const recordsBatch: ClearinghouseRecord[] = Array.from({ length: 30 }, (_, i) => ({
+        ...mockRecord1,
+        transactionId: `tx-batch-${i + 1}`,
+      }));
+
+      render(<ProcurementGantt records={recordsBatch} maxVisibleRecords={10} />);
+
+      const showMoreBtn = screen.getByTestId("show-more-orders-btn");
+      expect(showMoreBtn).toBeInTheDocument();
+      expect(showMoreBtn.textContent).toContain("Show More Orders (10 of 30)");
+
+      fireEvent.click(showMoreBtn);
+      // Visible count increases by 25
+      expect(screen.queryByTestId("show-more-orders-btn")).not.toBeInTheDocument();
+    });
   });
 });
