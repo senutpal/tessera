@@ -242,6 +242,15 @@ export function getWarningIconCls(severity: SlaSeverity): string {
   }
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 /**
  * Returns HTML badge string for visual milestone tooltip / cell rendering
  */
@@ -253,7 +262,7 @@ export function getWarningBadgeHtml(warning: SlaDelayWarning): string {
   };
 
   return `<span class="sla-warning-badge" data-sla-severity="${warning.severity}" style="padding:2px 6px; border-radius:4px; font-size:11px; font-weight:600; font-family:monospace; ${badgeColors[warning.severity]}">
-    ${warning.severity}: ${warning.message}
+    ${warning.severity}: ${escapeHtml(warning.message)}
   </span>`;
 }
 
