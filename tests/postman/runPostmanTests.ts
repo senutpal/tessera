@@ -124,6 +124,14 @@ export function createMockServer(port = 0): Promise<MockServerInstance> {
                   currency_code: "USD",
                   value: "249.99",
                 },
+                payments: {
+                  authorizations: [
+                    {
+                      id: "AUTH-1234567890",
+                      status: "CREATED",
+                    },
+                  ],
+                },
                 description: "Channel3 Escrow Hold for AP2 Mandate",
               },
             ],

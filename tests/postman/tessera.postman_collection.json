@@ -187,8 +187,10 @@
               "    pm.expect(jsonData.intent).to.eql('AUTHORIZE');",
               "    pm.expect(jsonData.status).to.be.oneOf(['CREATED', 'SAVED', 'APPROVED']);",
               "    pm.environment.set('order_id', jsonData.id);",
-              "    var authId = jsonData.authorization_id || ('AUTH-' + jsonData.id);",
+              "    var authId = (jsonData.purchase_units && jsonData.purchase_units[0] && jsonData.purchase_units[0].payments && jsonData.purchase_units[0].payments.authorizations && jsonData.purchase_units[0].payments.authorizations[0] && jsonData.purchase_units[0].payments.authorizations[0].id) || jsonData.authorization_id || ('AUTH-' + jsonData.id);",
               "    pm.environment.set('authorization_id', authId);",
+              "    var voidAuthId = pm.environment.get('void_authorization_id') || ('AUTH-VOID-' + jsonData.id);",
+              "    pm.environment.set('void_authorization_id', voidAuthId);",
               "});"
             ]
           }
@@ -414,11 +416,11 @@
           "raw": "{\n  \"reason\": \"SLA delivery deadline exceeded without carrier confirmation\"\n}"
         },
         "url": {
-          "raw": "{{baseUrl}}/v2/payments/authorizations/{{authorization_id}}/void",
+          "raw": "{{baseUrl}}/v2/payments/authorizations/{{void_authorization_id}}/void",
           "host": ["{{baseUrl}}"],
-          "path": ["v2", "payments", "authorizations", "{{authorization_id}}", "void"]
+          "path": ["v2", "payments", "authorizations", "{{void_authorization_id}}", "void"]
         },
-        "description": "Voids an authorization hold to immediately unlock and refund buyer escrow funds upon SLA expiration."
+        "description": "Voids an authorization hold to immediately unlock and refund buyer escrow funds upon SLA expiration. Scoped to a distinct authorization ID (void_authorization_id) to model SLA breach independently of the captured order authorization in stateful environments."
       },
       "response": []
     }
