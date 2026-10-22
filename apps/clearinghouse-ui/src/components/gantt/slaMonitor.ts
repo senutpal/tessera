@@ -234,7 +234,7 @@ export function evaluateGanttTasksSla(
 export function getWarningIconCls(severity: SlaSeverity): string {
   switch (severity) {
     case "CRITICAL":
-      return "b-fa b-fa-radiation text-rose-500 animate-pulse";
+      return "b-fa b-fa-radiation text-rose-500 motion-safe:animate-pulse";
     case "WARNING":
       return "b-fa b-fa-exclamation-triangle text-amber-500";
     default:
