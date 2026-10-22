@@ -1,6 +1,6 @@
 import { AlertTriangle, Moon, ShieldAlert, Sun, TrendingUp, Zap } from "lucide-react";
 import type React from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ClearinghouseGrid, type ClearinghouseGridHandle } from "./components/ClearinghouseGrid.js";
 import { ProcurementGantt } from "./components/gantt/ProcurementGantt.js";
@@ -21,6 +21,8 @@ export const App: React.FC = () => {
   const simTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [seqNumber, setSeqNumber] = useState<number>(112);
   const seqRef = useRef<number>(112);
+  const [recordsVersion, setRecordsVersion] = useState<number>(0);
+  const [ganttCriticalPath, setGanttCriticalPath] = useState<boolean>(true);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("tessera-theme");
@@ -117,6 +119,7 @@ export const App: React.FC = () => {
         );
       }
       scheduleStatsUpdate();
+      setRecordsVersion((v) => v + 1);
     },
     [scheduleStatsUpdate],
   );
@@ -128,6 +131,7 @@ export const App: React.FC = () => {
         recordsRef.current.set(item.transactionId, item);
       }
       recalculateStats();
+      setRecordsVersion((v) => v + 1);
     },
     [recalculateStats],
   );
@@ -139,8 +143,14 @@ export const App: React.FC = () => {
         recordsRef.current.set(item.transactionId, item);
       }
       recalculateStats();
+      setRecordsVersion((v) => v + 1);
     }
   }, [recalculateStats]);
+
+  const recordsList = useMemo(
+    () => Array.from(recordsRef.current.values()),
+    [recordsVersion],
+  );
 
   const defaultWsUrl =
     typeof window !== "undefined" && window.location.host
@@ -677,9 +687,10 @@ export const App: React.FC = () => {
           />
         ) : (
           <ProcurementGantt
-            records={Array.from(recordsRef.current.values())}
+            records={recordsList}
             theme={theme}
-            showCriticalPath={true}
+            showCriticalPath={ganttCriticalPath}
+            onToggleCriticalPath={setGanttCriticalPath}
             onTaskClick={(task) => {
               const rec = recordsRef.current.get(task.transactionId);
               if (rec) setSelectedRecord(rec);
