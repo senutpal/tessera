@@ -795,4 +795,71 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
     expect(trackStep?.status).toBe("FAILED");
     expect(trackStep?.error).toContain("TRACKER_NOT_FOUND");
   });
+
+  it("preserves tracker milestone transactionId and passes matching transactionId to captureEscrow", async () => {
+    const buyerKeyPair = generateEd25519KeyPair();
+    const mockProducts = [
+      {
+        id: "item-txid",
+        title: "Tracker TxID Item",
+        domain: "staples.com",
+        price: 45.0,
+      },
+    ];
+
+    let captureTxIdReceived: string | undefined;
+    let milestoneTxIdReceived: string | undefined;
+
+    const result = await runAgentProcurementLoop({
+      query: "item",
+      maxPrice: 60.0,
+      buyerKeyPair,
+      searchCatalogFn: async () => createMockCatalogResponse(mockProducts),
+      createEscrowOrderFn: async (opts) => ({
+        orderId: asOrderId("ORDER-TXID-01"),
+        status: "CREATED",
+        amount:
+          opts.amount instanceof Money
+            ? opts.amount
+            : Money.fromDecimalString(opts.amount.value, opts.amount.currency_code),
+        links: [],
+        rawResponse: createMockOrderResponse("ORDER-TXID-01"),
+      }),
+      authorizeOrderFn: async (opts) => ({
+        authorizationId: asAuthorizationId("AUTH-TXID-01"),
+        orderId: asOrderId(String(opts.orderId)),
+        status: "CREATED",
+        amount: Money.fromDecimalString("45.00", "USD"),
+        rawResponse: createMockOrderResponse(String(opts.orderId)),
+      }),
+      getShipmentTrackingFn: async (_txId, trackNum) => ({
+        transactionId: asTransactionId("TRACKER-TRANSACTION-999"),
+        trackingNumber: trackNum ?? "TRACK-999",
+        carrier: "FEDEX",
+        status: ShipmentMilestoneStatus.DELIVERED,
+        rawStatus: "DELIVERED",
+        trackingNumberValidated: true,
+      }),
+      captureEscrowFn: async (opts) => {
+        captureTxIdReceived = String(opts.transactionId);
+        milestoneTxIdReceived = String(opts.milestone?.transactionId);
+        return {
+          authorizationId: asAuthorizationId("AUTH-TXID-01"),
+          captureId: asCaptureId("CAP-TXID-01"),
+          status: "COMPLETED",
+          amount: Money.fromDecimalString("45.00", "USD"),
+          finalCapture: true,
+          capturedAt: new Date().toISOString(),
+          requestId: "req-txid",
+          releaseTrigger: "CARRIER_DELIVERY_PROOF",
+          clearinghouseState: ClearinghouseState.SETTLED,
+          rawResponse: createMockCaptureResponse("CAP-TXID-01"),
+        };
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(captureTxIdReceived).toBe("TRACKER-TRANSACTION-999");
+    expect(milestoneTxIdReceived).toBe("TRACKER-TRANSACTION-999");
+  });
 });
