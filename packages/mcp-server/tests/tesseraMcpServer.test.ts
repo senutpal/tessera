@@ -1,4 +1,7 @@
+import { createServer as createHttpServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
   asAuthorizationId,
@@ -7,7 +10,7 @@ import {
   Money,
   ShipmentMilestoneStatus,
 } from "@tessera/core";
-import { generateEd25519KeyPair, signMandate } from "@tessera/mandates";
+import { computeCheckoutHash, generateEd25519KeyPair, signMandate } from "@tessera/mandates";
 import type { PayPalOrderResponse } from "@tessera/paypal";
 import { PolicyEngine } from "@tessera/policy";
 import { describe, expect, it } from "vitest";
@@ -18,6 +21,11 @@ import {
   startMcpServer,
   TesseraMcpServer,
 } from "../index.js";
+
+function toMoney(amount: Money | { currency_code: string; value: string }): Money {
+  if (amount instanceof Money) return amount;
+  return Money.fromDecimalString(amount.value, amount.currency_code);
+}
 
 function createMockOrderResponse(id = "ORDER-MOCK-001"): PayPalOrderResponse {
   return {
@@ -88,6 +96,7 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
     expect(searchTool?.inputSchema.properties).toHaveProperty("query");
     expect(searchTool?.inputSchema.properties).toHaveProperty("max_price");
     expect(searchTool?.inputSchema.properties).toHaveProperty("allowed_domains");
+    expect(searchTool?.inputSchema.properties).toHaveProperty("in_stock_only");
 
     const mandateTool = listResult.tools.find((t) => t.name === "tessera_submit_mandate");
     expect(mandateTool?.inputSchema.properties).toHaveProperty("signed_mandate");
@@ -140,6 +149,70 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
       await server.close();
     });
 
+    it("filters out out-of-stock items when in_stock_only is true", async () => {
+      const mockProducts = [
+        createMockProduct("prod-1", "Cheaper Out Of Stock Item", "bestbuy.com", 49.99, false),
+        createMockProduct("prod-2", "In Stock Item", "bestbuy.com", 79.99, true),
+      ];
+
+      const server = new TesseraMcpServer({
+        searchProductsFn: async () => ({ products: mockProducts }),
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_search_catalog",
+        arguments: {
+          query: "gadget",
+          in_stock_only: true,
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const text = getTextContent(result);
+      expect(text).toContain("In Stock Item");
+      expect(text).not.toContain("Cheaper Out Of Stock Item");
+
+      await client.close();
+      await server.close();
+    });
+
+    it("normalizes protocol URLs in allowed_domains parameter", async () => {
+      const mockProducts = [
+        createMockProduct("prod-1", "Product A", "bestbuy.com", 50.0),
+        createMockProduct("prod-2", "Product B", "walmart.com", 50.0),
+      ];
+
+      const server = new TesseraMcpServer({
+        searchProductsFn: async () => ({ products: mockProducts }),
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_search_catalog",
+        arguments: {
+          query: "item",
+          allowed_domains: ["https://www.bestbuy.com/products"],
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const text = getTextContent(result);
+      expect(text).toContain("Product A");
+      expect(text).not.toContain("Product B");
+
+      await client.close();
+      await server.close();
+    });
+
     it("returns informative message when no products match budget or domain filter", async () => {
       const mockProducts = [createMockProduct("prod-1", "High-End Server", "dell.com", 5000.0)];
 
@@ -162,16 +235,16 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
 
       expect(result.isError).toBeFalsy();
       const text = getTextContent(result);
-      expect(text).toContain("No products found");
+      expect(text).toContain("No products found matching query");
 
       await client.close();
       await server.close();
     });
 
-    it("gracefully catches search exceptions and returns error without crashing", async () => {
+    it("handles underlying search exceptions gracefully", async () => {
       const server = new TesseraMcpServer({
         searchProductsFn: async () => {
-          throw new Error("Channel3 upstream gateway timeout");
+          throw new Error("Channel3 Rate Limit Exceeded: HTTP 429");
         },
       });
 
@@ -182,12 +255,14 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
 
       const result = await client.callTool({
         name: "tessera_search_catalog",
-        arguments: { query: "failing query" },
+        arguments: {
+          query: "keyboard",
+        },
       });
 
       expect(result.isError).toBe(true);
       const text = getTextContent(result);
-      expect(text).toContain("Catalog search failed: Channel3 upstream gateway timeout");
+      expect(text).toContain("Catalog search failed: Channel3 Rate Limit Exceeded");
 
       await client.close();
       await server.close();
@@ -195,32 +270,59 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
   });
 
   describe("tessera_submit_mandate", () => {
-    it("validates AP2 Ed25519 signature and places PayPal escrow order", async () => {
-      let createdEscrowPayload: unknown = null;
-      let authorizedOrderId: unknown = null;
+    it("verifies Ed25519 signature and dispatches PayPal escrow authorization", async () => {
+      const keyPair = generateEd25519KeyPair();
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      const paymentMandate = {
+        vct: "mandate.payment.1",
+        transaction_id: "tx-test-12345",
+        payee: {
+          id: "bestbuy.com",
+          name: "Best Buy",
+          website: "https://bestbuy.com",
+        },
+        payment_amount: {
+          amount: 14999,
+          currency: "USD",
+        },
+        payment_instrument: {
+          id: "pi-tessera",
+          type: "PAYPAL_ESCROW",
+          description: "Tessera PayPal Escrow Authorization",
+        },
+        iat: nowEpoch,
+        exp: nowEpoch + 3600,
+        nonce: "nonce-rand-12345",
+      };
+
+      const signedMandate = signMandate(paymentMandate, keyPair.privateKey, keyPair.publicKey);
+
+      let createEscrowCalled = false;
+      let authorizeCalled = false;
 
       const server = new TesseraMcpServer({
         createEscrowOrderFn: async (opts) => {
-          createdEscrowPayload = opts;
+          createEscrowCalled = true;
+          const money = toMoney(opts.amount);
+          expect(money.toDecimalString()).toBe("149.99");
+          expect(money.currency).toBe("USD");
           return {
-            orderId: asOrderId("ORDER-777"),
+            orderId: asOrderId("ORDER-TEST-001"),
             status: "CREATED",
-            amount:
-              opts.amount instanceof Money
-                ? opts.amount
-                : Money.fromDecimalString(opts.amount.value, opts.amount.currency_code),
+            amount: money,
             links: [],
-            rawResponse: createMockOrderResponse("ORDER-777"),
+            rawResponse: createMockOrderResponse("ORDER-TEST-001"),
           };
         },
         authorizeOrderFn: async (opts) => {
-          authorizedOrderId = opts.orderId;
+          authorizeCalled = true;
+          expect(opts.orderId).toBe("ORDER-TEST-001");
           return {
-            authorizationId: asAuthorizationId("AUTH-888"),
-            orderId: asOrderId(String(opts.orderId)),
+            authorizationId: asAuthorizationId("AUTH-TEST-999"),
+            orderId: asOrderId(opts.orderId),
             status: "CREATED",
-            amount: Money.fromDecimalString("89.99", "USD"),
-            rawResponse: createMockOrderResponse(String(opts.orderId)),
+            amount: Money.fromDecimalString("149.99", "USD"),
+            rawResponse: createMockOrderResponse(opts.orderId),
           };
         },
       });
@@ -230,38 +332,12 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
       const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
       await client.connect(clientTransport);
 
-      const keyPair = generateEd25519KeyPair();
-      const nowEpoch = Math.floor(Date.now() / 1000);
-      const paymentMandate = {
-        vct: "mandate.payment.1",
-        transaction_id: "tx-procure-101",
-        payee: {
-          id: "bestbuy.com",
-          name: "Best Buy Official",
-          website: "https://bestbuy.com",
-        },
-        payment_amount: {
-          amount: 8999,
-          currency: "USD",
-        },
-        payment_instrument: {
-          id: "pi-tessera",
-          type: "PAYPAL_ESCROW",
-        },
-        iat: nowEpoch,
-        exp: nowEpoch + 3600,
-        nonce: "nonce-valid-101",
-      };
-
-      const signedMandate = signMandate(paymentMandate, keyPair.privateKey, keyPair.publicKey);
-
       const args: SubmitMandateInput = {
         signed_mandate: {
           mandate: paymentMandate,
           signature: signedMandate.signature,
           signerPublicKey: keyPair.publicKey,
         },
-        description: "Autonomous test purchase",
       };
 
       const result = await client.callTool({
@@ -271,20 +347,168 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
 
       expect(result.isError).toBeFalsy();
       const text = getTextContent(result);
-      expect(text).toContain("AP2 Mandate Authorization Succeeded");
-      expect(text).toContain("ORDER-777");
-      expect(text).toContain("AUTH-888");
-      expect(text).toContain("89.99 USD");
-      expect(text).toContain("Ed25519 signature authenticated");
 
-      expect(createdEscrowPayload).toBeTruthy();
-      expect(authorizedOrderId).toBe("ORDER-777");
+      expect(text).toContain("AP2 Mandate Authorization Succeeded");
+      expect(text).toContain("ORDER-TEST-001");
+      expect(text).toContain("AUTH-TEST-999");
+      expect(text).toContain("149.99 USD");
+      expect(createEscrowCalled).toBe(true);
+      expect(authorizeCalled).toBe(true);
 
       await client.close();
       await server.close();
     });
 
-    it("rejects tampered mandate payload before dispatching any PayPal calls", async () => {
+    it("accepts snake_case public_key in signed_mandate container", async () => {
+      const keyPair = generateEd25519KeyPair();
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      const paymentMandate = {
+        vct: "mandate.payment.1",
+        transaction_id: "tx-snake-key",
+        payee: { id: "store.com", name: "Store", website: "https://store.com" },
+        payment_amount: { amount: 5000, currency: "USD" },
+        payment_instrument: { id: "pi-1", type: "PAYPAL_ESCROW" },
+        iat: nowEpoch,
+        exp: nowEpoch + 3600,
+        nonce: "nonce-snake-key",
+      };
+
+      const signedMandate = signMandate(paymentMandate, keyPair.privateKey, keyPair.publicKey);
+
+      const server = new TesseraMcpServer({
+        createEscrowOrderFn: async (opts) => ({
+          orderId: asOrderId("ORDER-SNAKE-01"),
+          status: "CREATED",
+          amount: toMoney(opts.amount),
+          links: [],
+          rawResponse: createMockOrderResponse("ORDER-SNAKE-01"),
+        }),
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_submit_mandate",
+        arguments: {
+          signed_mandate: {
+            mandate: paymentMandate,
+            signature: signedMandate.signature,
+            public_key: keyPair.publicKey,
+          },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const text = getTextContent(result);
+      expect(text).toContain("ORDER-SNAKE-01");
+
+      await client.close();
+      await server.close();
+    });
+
+    it("verifies and processes CheckoutMandate when explicit amount is supplied", async () => {
+      const keyPair = generateEd25519KeyPair();
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      const fakeJwt = "header.payload.signature";
+      const checkoutHash = computeCheckoutHash(fakeJwt);
+
+      const checkoutMandate = {
+        vct: "mandate.checkout.1",
+        checkout_jwt: fakeJwt,
+        checkout_hash: checkoutHash,
+        iat: nowEpoch,
+        exp: nowEpoch + 3600,
+        nonce: "nonce-checkout-001",
+      };
+
+      const signed = signMandate(checkoutMandate, keyPair.privateKey, keyPair.publicKey);
+
+      let capturedAmount: Money | undefined;
+      const server = new TesseraMcpServer({
+        createEscrowOrderFn: async (opts) => {
+          const money = toMoney(opts.amount);
+          capturedAmount = money;
+          return {
+            orderId: asOrderId("ORDER-CHECKOUT-101"),
+            status: "CREATED",
+            amount: money,
+            links: [],
+            rawResponse: createMockOrderResponse("ORDER-CHECKOUT-101"),
+          };
+        },
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_submit_mandate",
+        arguments: {
+          signed_mandate: {
+            mandate: checkoutMandate,
+            signature: signed.signature,
+            signerPublicKey: keyPair.publicKey,
+          },
+          amount: 89.5,
+          currency: "USD",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(capturedAmount?.toDecimalString()).toBe("89.50");
+
+      await client.close();
+      await server.close();
+    });
+
+    it("rejects CheckoutMandate when no explicit amount is provided", async () => {
+      const keyPair = generateEd25519KeyPair();
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      const fakeJwt = "header.payload.signature";
+      const checkoutHash = computeCheckoutHash(fakeJwt);
+
+      const checkoutMandate = {
+        vct: "mandate.checkout.1",
+        checkout_jwt: fakeJwt,
+        checkout_hash: checkoutHash,
+        iat: nowEpoch,
+        exp: nowEpoch + 3600,
+        nonce: "nonce-checkout-no-amt",
+      };
+
+      const signed = signMandate(checkoutMandate, keyPair.privateKey, keyPair.publicKey);
+
+      const server = new TesseraMcpServer();
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_submit_mandate",
+        arguments: {
+          signed_mandate: {
+            mandate: checkoutMandate,
+            signature: signed.signature,
+            signerPublicKey: keyPair.publicKey,
+          },
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = getTextContent(result);
+      expect(text).toContain("Mandate does not include payment_amount");
+
+      await client.close();
+      await server.close();
+    });
+
+    it("rejects tampered mandate payloads when Ed25519 signature fails verification", async () => {
       let createOrderCalled = false;
       const server = new TesseraMcpServer({
         createEscrowOrderFn: async () => {
@@ -423,7 +647,7 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
   });
 
   describe("tessera_check_settlement", () => {
-    it("reports settlement ready when shipment is verified DELIVERED", async () => {
+    it("reports settlement ready when shipment is verified DELIVERED and escrow authorized", async () => {
       const server = new TesseraMcpServer({
         getOrderFn: async (orderId) => ({
           orderId: asOrderId(orderId),
@@ -474,6 +698,7 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
           orderId: asOrderId(orderId),
           status: "CREATED",
           amount: Money.fromDecimalString("149.99", "USD"),
+          authorizationId: asAuthorizationId("AUTH-TRANSIT-01"),
           links: [],
           rawResponse: createMockOrderResponse(orderId),
         }),
@@ -509,6 +734,37 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
       await server.close();
     });
 
+    it("reports pending authorization when order exists but has not been authorized in escrow", async () => {
+      const server = new TesseraMcpServer({
+        getOrderFn: async (orderId) => ({
+          orderId: asOrderId(orderId),
+          status: "CREATED",
+          amount: Money.fromDecimalString("50.00", "USD"),
+          links: [],
+          rawResponse: createMockOrderResponse(orderId),
+        }),
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_check_settlement",
+        arguments: {
+          order_id: "ORDER-UNAPPROVED",
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const text = getTextContent(result);
+      expect(text).toContain("PENDING AUTHORIZATION");
+
+      await client.close();
+      await server.close();
+    });
+
     it("errors when called without any identifiers", async () => {
       const server = new TesseraMcpServer();
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -538,6 +794,67 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
       expect(server).toBeInstanceOf(TesseraMcpServer);
       expect(server.getMcpServer()).toBeTruthy();
       await server.close();
+    });
+
+    it("handles real SSE transport with concurrent clients over HTTP", async () => {
+      const mockProducts = [
+        createMockProduct("sse-prod-1", "SSE Mechanical Keyboard", "bestbuy.com", 89.99),
+      ];
+
+      const mcpServer = new TesseraMcpServer({
+        name: "tessera-sse-test",
+        searchProductsFn: async () => ({ products: mockProducts }),
+      });
+
+      const httpServer = createHttpServer(async (req, res) => {
+        const url = new URL(req.url ?? "", "http://localhost");
+        if (req.method === "GET" && url.pathname === "/sse") {
+          await mcpServer.createSseTransport("/messages", res);
+        } else if (req.method === "POST" && url.pathname === "/messages") {
+          const sessionId = url.searchParams.get("sessionId");
+          if (!sessionId) {
+            res.writeHead(400).end("Missing sessionId");
+            return;
+          }
+          await mcpServer.handleSsePostMessage(sessionId, req, res);
+        } else {
+          res.writeHead(404).end("Not found");
+        }
+      });
+
+      await new Promise<void>((resolve) => httpServer.listen(0, resolve));
+      const port = (httpServer.address() as AddressInfo).port;
+      const sseUrl = new URL(`http://localhost:${port}/sse`);
+
+      // Client 1 connects over SSE
+      const client1 = new Client({ name: "sse-client-1", version: "1.0.0" }, { capabilities: {} });
+      const transport1 = new SSEClientTransport(sseUrl);
+      await client1.connect(transport1);
+
+      // Client 2 connects concurrently over SSE (verifying multi-session support)
+      const client2 = new Client({ name: "sse-client-2", version: "1.0.0" }, { capabilities: {} });
+      const transport2 = new SSEClientTransport(sseUrl);
+      await client2.connect(transport2);
+
+      expect(mcpServer.activeSseSessionCount).toBe(2);
+
+      // Client 1 queries tools
+      const toolsResult1 = await client1.listTools();
+      expect(toolsResult1.tools.map((t) => t.name)).toContain("tessera_search_catalog");
+
+      // Client 2 calls search catalog tool over SSE
+      const searchResult = await client2.callTool({
+        name: "tessera_search_catalog",
+        arguments: { query: "keyboard" },
+      });
+      const text = getTextContent(searchResult);
+      expect(text).toContain("SSE Mechanical Keyboard");
+
+      // Cleanup
+      await client1.close();
+      await client2.close();
+      await mcpServer.close();
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     });
   });
 });

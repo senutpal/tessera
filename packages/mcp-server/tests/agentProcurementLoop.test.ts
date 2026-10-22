@@ -44,7 +44,13 @@ function createMockCaptureResponse(id = "CAPTURE-MOCK-001"): PayPalCaptureRespon
 }
 
 function createMockCatalogResponse(
-  products: Array<{ id: string; title: string; domain: string; price: number }>,
+  products: Array<{
+    id: string;
+    title: string;
+    domain: string;
+    price: number;
+    inStock?: boolean;
+  }>,
 ) {
   return {
     products: products.map((p) => ({
@@ -52,7 +58,7 @@ function createMockCatalogResponse(
       title: p.title,
       offers: [
         {
-          availability: "InStock" as const,
+          availability: (p.inStock ?? true) ? ("InStock" as const) : ("OutOfStock" as const),
           domain: p.domain,
           price: {
             currency: "USD",
@@ -162,6 +168,188 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
     expect(result.steps[4]?.data?.captureId).toBe("CAPTURE-CHAIR-303");
   });
 
+  it("skips cheaper out-of-stock offer and picks in-stock offer", async () => {
+    const buyerKeyPair = generateEd25519KeyPair();
+    const mockProducts = [
+      {
+        id: "mouse-001",
+        title: "Wireless Mouse (OOS)",
+        domain: "store-a.com",
+        price: 29.99,
+        inStock: false,
+      },
+      {
+        id: "mouse-002",
+        title: "Wireless Mouse (In Stock)",
+        domain: "store-b.com",
+        price: 49.99,
+        inStock: true,
+      },
+    ];
+
+    const result = await runAgentProcurementLoop({
+      query: "mouse",
+      maxPrice: 60.0,
+      buyerKeyPair,
+      simulateCarrierDelivery: true,
+      searchCatalogFn: async () => createMockCatalogResponse(mockProducts),
+      createEscrowOrderFn: async (opts) => ({
+        orderId: asOrderId("ORDER-MOUSE-01"),
+        status: "CREATED",
+        amount:
+          opts.amount instanceof Money
+            ? opts.amount
+            : Money.fromDecimalString(opts.amount.value, opts.amount.currency_code),
+        links: [],
+        rawResponse: createMockOrderResponse("ORDER-MOUSE-01"),
+      }),
+      authorizeOrderFn: async (opts) => ({
+        authorizationId: asAuthorizationId("AUTH-MOUSE-01"),
+        orderId: asOrderId(String(opts.orderId)),
+        status: "CREATED",
+        amount: Money.fromDecimalString("49.99", "USD"),
+        rawResponse: createMockOrderResponse(String(opts.orderId)),
+      }),
+      captureEscrowFn: async (opts) => ({
+        authorizationId: asAuthorizationId("AUTH-MOUSE-01"),
+        captureId: asCaptureId("CAPTURE-MOUSE-01"),
+        status: "COMPLETED",
+        amount: opts.amount ?? Money.fromDecimalString("49.99", "USD"),
+        finalCapture: true,
+        capturedAt: new Date().toISOString(),
+        requestId: "req-capture-mouse",
+        releaseTrigger: "CARRIER_DELIVERY_PROOF",
+        clearinghouseState: ClearinghouseState.SETTLED,
+        rawResponse: createMockCaptureResponse("CAPTURE-MOUSE-01"),
+      }),
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.steps[0]?.data?.productId).toBe("mouse-002");
+    expect(result.steps[0]?.data?.domain).toBe("store-b.com");
+    expect(result.settledAmount?.toDecimalString()).toBe("49.99");
+  });
+
+  it("validates input parameters before initiating procurement loop", async () => {
+    const buyerKeyPair = generateEd25519KeyPair();
+
+    const emptyQueryRes = await runAgentProcurementLoop({
+      query: "   ",
+      maxPrice: 100,
+      buyerKeyPair,
+    });
+    expect(emptyQueryRes.success).toBe(false);
+    expect(emptyQueryRes.steps[0]?.step).toBe("DISCOVER");
+    expect(emptyQueryRes.steps[0]?.status).toBe("FAILED");
+    expect(emptyQueryRes.error).toContain("cannot be empty");
+
+    const invalidPriceRes = await runAgentProcurementLoop({
+      query: "keyboard",
+      maxPrice: -10,
+      buyerKeyPair,
+    });
+    expect(invalidPriceRes.success).toBe(false);
+    expect(invalidPriceRes.steps[0]?.step).toBe("DISCOVER");
+    expect(invalidPriceRes.steps[0]?.status).toBe("FAILED");
+    expect(invalidPriceRes.error).toContain("positive finite number");
+  });
+
+  it("accurately attributes intermediate ESCROW_RESERVE failure and preserves order ID", async () => {
+    const buyerKeyPair = generateEd25519KeyPair();
+    const mockProducts = [
+      {
+        id: "prod-1",
+        title: "Test Item",
+        domain: "store.com",
+        price: 50.0,
+      },
+    ];
+
+    const result = await runAgentProcurementLoop({
+      query: "item",
+      maxPrice: 100.0,
+      buyerKeyPair,
+      searchCatalogFn: async () => createMockCatalogResponse(mockProducts),
+      createEscrowOrderFn: async (opts) => ({
+        orderId: asOrderId("ORDER-RESERVE-FAIL"),
+        status: "CREATED",
+        amount:
+          opts.amount instanceof Money
+            ? opts.amount
+            : Money.fromDecimalString(opts.amount.value, opts.amount.currency_code),
+        links: [],
+        rawResponse: createMockOrderResponse("ORDER-RESERVE-FAIL"),
+      }),
+      authorizeOrderFn: async () => {
+        throw new Error("PayPal authorization connection timed out");
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.orderId).toBe("ORDER-RESERVE-FAIL");
+    expect(result.authorizationId).toBeUndefined();
+    expect(result.error).toContain("PayPal authorization connection timed out");
+
+    const reserveStep = result.steps.find((s) => s.step === "ESCROW_RESERVE");
+    expect(reserveStep?.status).toBe("FAILED");
+    expect(reserveStep?.error).toContain("Failed to authorize escrow order");
+
+    // Must NOT attribute failure to SETTLE!
+    const settleStep = result.steps.find((s) => s.step === "SETTLE");
+    expect(settleStep).toBeUndefined();
+  });
+
+  it("accurately attributes intermediate SHIPMENT_TRACK failure and preserves authorization ID", async () => {
+    const buyerKeyPair = generateEd25519KeyPair();
+    const mockProducts = [
+      {
+        id: "prod-1",
+        title: "Test Item",
+        domain: "store.com",
+        price: 50.0,
+      },
+    ];
+
+    const result = await runAgentProcurementLoop({
+      query: "item",
+      maxPrice: 100.0,
+      buyerKeyPair,
+      searchCatalogFn: async () => createMockCatalogResponse(mockProducts),
+      createEscrowOrderFn: async (opts) => ({
+        orderId: asOrderId("ORDER-TRACK-FAIL"),
+        status: "CREATED",
+        amount:
+          opts.amount instanceof Money
+            ? opts.amount
+            : Money.fromDecimalString(opts.amount.value, opts.amount.currency_code),
+        links: [],
+        rawResponse: createMockOrderResponse("ORDER-TRACK-FAIL"),
+      }),
+      authorizeOrderFn: async (opts) => ({
+        authorizationId: asAuthorizationId("AUTH-TRACK-FAIL"),
+        orderId: asOrderId(String(opts.orderId)),
+        status: "CREATED",
+        amount: Money.fromDecimalString("50.00", "USD"),
+        rawResponse: createMockOrderResponse(String(opts.orderId)),
+      }),
+      getShipmentTrackingFn: async () => {
+        throw new Error("Carrier tracking API rate limit exceeded");
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.orderId).toBe("ORDER-TRACK-FAIL");
+    expect(result.authorizationId).toBe("AUTH-TRACK-FAIL");
+
+    const trackStep = result.steps.find((s) => s.step === "SHIPMENT_TRACK");
+    expect(trackStep?.status).toBe("FAILED");
+    expect(trackStep?.error).toContain("Carrier tracking query failed");
+
+    // Must NOT attribute failure to SETTLE!
+    const settleStep = result.steps.find((s) => s.step === "SETTLE");
+    expect(settleStep).toBeUndefined();
+  });
+
   it("fails early at DISCOVER when all available offers exceed buyer budget cap", async () => {
     const buyerKeyPair = generateEd25519KeyPair();
     const mockProducts = [
@@ -186,7 +374,7 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain("No matching products found");
+    expect(result.error).toContain("No matching in-stock products found");
     expect(result.steps).toHaveLength(1);
     expect(result.steps[0]?.step).toBe("DISCOVER");
     expect(result.steps[0]?.status).toBe("FAILED");
