@@ -7,6 +7,7 @@ import {
   mapRecordToGanttProject,
   mapRecordToGanttTasks,
 } from "../src/components/gantt/ganttDataMapper.js";
+import { evaluateGanttTasksSla } from "../src/components/gantt/slaMonitor.js";
 import {
   BryntumDependencyType,
   PROCUREMENT_STAGES,
@@ -403,6 +404,11 @@ describe("Ticket 11.1: Procurement Task Data Model & State Mapper (ganttDataMapp
 
       expect(updatedDispatch?.duration).toBe(baselineDispatch?.duration);
       expect(updatedTransit?.startDate).toBe(baselineTransit?.startDate);
+
+      const refDate = new Date("2026-10-22T12:00:00.000Z");
+      const baselineSla = evaluateGanttTasksSla(baselineTasks, refDate);
+      const updatedSla = evaluateGanttTasksSla(updatedTasks, refDate);
+      expect(updatedSla).toEqual(baselineSla);
     });
   });
 });
