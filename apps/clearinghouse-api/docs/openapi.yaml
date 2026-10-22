@@ -8,7 +8,7 @@ info:
     carrier shipment tracking milestone releases, automated dispute adjudication, and webhook verification.
   contact:
     name: Tessera Engineering Team
-    url: https://github.com/paypal/PayPal-TypeScript-Server-SDK
+    url: https://github.com/senutpal/tessera
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
@@ -660,6 +660,8 @@ components:
         - payee
         - payment_amount
         - payment_instrument
+        - exp
+        - nonce
       properties:
         vct:
           type: string
@@ -695,6 +697,8 @@ components:
         - vct
         - checkout_jwt
         - checkout_hash
+        - exp
+        - nonce
       properties:
         vct:
           type: string
@@ -841,7 +845,7 @@ components:
         cert_url:
           type: string
           format: uri
-          pattern: '^https://api(\-m)?\.(sandbox\.)?paypal\.com/'
+          pattern: '^https://api(-m)?\.(sandbox\.)?paypal\.com/'
           example: https://api.sandbox.paypal.com/v1/notifications/certs/CERT-123
         transmission_id:
           type: string
@@ -852,7 +856,7 @@ components:
         transmission_time:
           type: string
           format: date-time
-          example: 2026-10-22T10:00:00Z
+          example: "2026-10-22T10:00:00Z"
         webhook_id:
           type: string
           example: WH-12345678
