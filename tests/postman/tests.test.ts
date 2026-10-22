@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import YAML from "yaml";
 import { runPostmanTests } from "./runPostmanTests.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -20,29 +21,41 @@ describe("Phase 13: Postman Test Suite & APIMatic OpenAPI Spec", () => {
     it("provides a valid OpenAPI 3.1 specification file with all required clearinghouse endpoints", () => {
       expect(fs.existsSync(openapiPath)).toBe(true);
       const content = fs.readFileSync(openapiPath, "utf-8");
+      const doc = YAML.parse(content);
 
-      expect(content).toContain("openapi: 3.1.0");
-      expect(content).toContain("title: Tessera Clearinghouse API");
+      expect(doc.openapi).toBe("3.1.0");
+      expect(doc.info.title).toBe("Tessera Clearinghouse API");
+      expect(doc.info.contact.url).toBe("https://github.com/senutpal/tessera");
 
-      // Verify all required endpoints are documented
-      const requiredEndpoints = [
-        "/v1/oauth2/token",
-        "/api/v1/mandates/verify",
-        "/v2/checkout/orders",
-        "/v1/notifications/verify-webhook-signature",
-        "/v1/shipping/trackers",
-        "/v2/payments/authorizations/{authorization_id}/capture",
-        "/v2/payments/authorizations/{authorization_id}/void",
+      // Verify all required endpoints and HTTP methods exist under paths
+      const requiredOperations: Array<{ path: string; method: string }> = [
+        { path: "/v1/oauth2/token", method: "post" },
+        { path: "/api/v1/mandates/verify", method: "post" },
+        { path: "/v2/checkout/orders", method: "post" },
+        { path: "/v1/notifications/verify-webhook-signature", method: "post" },
+        { path: "/v1/shipping/trackers", method: "get" },
+        { path: "/v2/payments/authorizations/{authorization_id}/capture", method: "post" },
+        { path: "/v2/payments/authorizations/{authorization_id}/void", method: "post" },
       ];
 
-      for (const endpoint of requiredEndpoints) {
-        expect(content).toContain(endpoint);
+      for (const op of requiredOperations) {
+        expect(doc.paths[op.path]).toBeDefined();
+        expect(doc.paths[op.path][op.method]).toBeDefined();
       }
 
-      // Verify AP2 mandate and webhook components
-      expect(content).toContain("AP2PaymentMandate:");
-      expect(content).toContain("AP2CheckoutMandate:");
-      expect(content).toContain("VerifyWebhookSignatureRequest:");
+      // Verify AP2 mandate and webhook components under components.schemas
+      const schemas = doc.components?.schemas;
+      expect(schemas).toBeDefined();
+      expect(schemas.AP2PaymentMandate).toBeDefined();
+      expect(schemas.AP2PaymentMandate.required).toContain("exp");
+      expect(schemas.AP2PaymentMandate.required).toContain("nonce");
+      expect(schemas.AP2CheckoutMandate).toBeDefined();
+      expect(schemas.AP2CheckoutMandate.required).toContain("exp");
+      expect(schemas.AP2CheckoutMandate.required).toContain("nonce");
+      expect(schemas.VerifyWebhookSignatureRequest).toBeDefined();
+      expect(schemas.VerifyWebhookSignatureRequest.properties.transmission_time.example).toBe(
+        "2026-10-22T10:00:00Z",
+      );
     });
 
     it("provides an APIMatic configuration file configured for SDK codegen and Context Plugins", () => {
@@ -128,6 +141,7 @@ describe("Phase 13: Postman Test Suite & APIMatic OpenAPI Spec", () => {
       expect(keys).toContain("current_access_token");
       expect(keys).toContain("order_id");
       expect(keys).toContain("authorization_id");
+      expect(keys).toContain("void_authorization_id");
     });
   });
 
