@@ -296,14 +296,14 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
               baselines: { disabled: false },
               dependencies: { disabled: false },
               taskTooltip: {
-                template: ({
-                  taskRecord,
-                }: {
-                  taskRecord: {
-                    name?: string;
-                    status?: string;
-                    duration?: number;
-                  };
+                template: (data?: {
+                  taskRecord?:
+                    | {
+                        name?: string | undefined;
+                        status?: string | undefined;
+                        duration?: number | undefined;
+                      }
+                    | undefined;
                 }) => {
                   const esc = (v: unknown) =>
                     String(v ?? "").replace(
@@ -313,10 +313,11 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
                           c
                         ] as string,
                     );
+                  const record = data?.taskRecord;
                   return `<div class="p-2 font-mono text-xs">
-                    <div class="font-bold">${esc(taskRecord.name)}</div>
-                    <div>Status: ${esc(taskRecord.status)}</div>
-                    <div>Duration: ${esc(taskRecord.duration ?? 0)}h</div>
+                    <div class="font-bold">${esc(record?.name)}</div>
+                    <div>Status: ${esc(record?.status)}</div>
+                    <div>Duration: ${esc(record?.duration ?? 0)}h</div>
                   </div>`;
                 },
               },

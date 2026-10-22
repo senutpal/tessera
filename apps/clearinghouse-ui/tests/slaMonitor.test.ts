@@ -261,5 +261,23 @@ describe("Ticket 11.3: SLA Breach & Delay Warning Engine (slaMonitor)", () => {
       expect(badgeHtml).toContain("&amp;");
       expect(badgeHtml).toContain("&quot;quotes&quot;");
     });
+
+    it("safely handles nullish warning message in getWarningBadgeHtml", () => {
+      const emptyWarning = {
+        id: "warn-empty-01",
+        transactionId: "tx-sla-empty",
+        stage: "MERCHANT_DISPATCH" as const,
+        severity: "INFO" as const,
+        message: undefined as unknown as string,
+        allocatedDurationHours: 48,
+        actualDurationHours: 48,
+        delayHours: 0,
+        timestamp: "2026-10-21T10:00:00.000Z",
+      };
+
+      expect(() => getWarningBadgeHtml(emptyWarning)).not.toThrow();
+      const badgeHtml = getWarningBadgeHtml(emptyWarning);
+      expect(badgeHtml).toContain("INFO:");
+    });
   });
 });

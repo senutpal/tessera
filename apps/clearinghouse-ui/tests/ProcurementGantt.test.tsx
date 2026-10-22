@@ -100,12 +100,14 @@ describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (Procurement
         | {
             features?: {
               taskTooltip?: {
-                template?: (data: {
-                  taskRecord: {
-                    name?: string;
-                    status?: string;
-                    duration?: number;
-                  };
+                template?: (data?: {
+                  taskRecord?:
+                    | {
+                        name?: string | undefined;
+                        status?: string | undefined;
+                        duration?: number | undefined;
+                      }
+                    | undefined;
                 }) => string;
               };
             };
@@ -150,6 +152,13 @@ describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (Procurement
         taskRecord: { name: "Undefined Duration Task", status: "PENDING" },
       });
       expect(undefinedHtml).toContain("Duration: 0h");
+
+      // Verify nullish data or missing taskRecord does not throw uncaught error
+      expect(() => template()).not.toThrow();
+      expect(() => template({})).not.toThrow();
+      expect(() => template({ taskRecord: undefined })).not.toThrow();
+      const emptyHtml = template();
+      expect(emptyHtml).toContain("Duration: 0h");
     });
   });
 
