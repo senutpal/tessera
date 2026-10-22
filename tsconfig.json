@@ -20,5 +20,5 @@
     "sourceMap": true,
     "jsx": "react-jsx"
   },
-  "include": ["packages/**/*", "apps/**/*"]
+  "include": ["packages/**/*", "apps/**/*", "tests/**/*"]
 }

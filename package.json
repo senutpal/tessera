@@ -14,14 +14,18 @@
     "typecheck": "tsc --noEmit",
     "build": "pnpm -r run build",
     "test": "vitest run",
+    "test:postman": "tsx tests/postman/runPostmanTests.ts",
     "prepare": "husky"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
+    "@types/newman": "^5.3.6",
     "@types/node": "^22.10.5",
     "dependency-cruiser": "^16.10.0",
     "husky": "^9.1.7",
     "lint-staged": "^15.4.3",
+    "newman": "^6.2.3",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.3",
     "vitest": "^3.0.0"
   },

@@ -1,0 +1,426 @@
+{
+  "info": {
+    "_postman_id": "c71a3964-bca8-47c0-a7d1-0f7f2b9ea420",
+    "name": "Tessera Clearinghouse Test Suite",
+    "description": "Automated Postman Collection testing the full clearinghouse lifecycle: OAuth2 token acquisition, AP2 mandate verification, Orders v2 escrow hold, webhook signature verification, shipment tracking milestone, escrow capture release, and SLA void.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Dynamic OAuth2 token pre-request token caching",
+          "var token = pm.environment.get('current_access_token');",
+          "var requestName = pm.info.requestName || '';",
+          "if (!token && !requestName.includes('OAuth2')) {",
+          "    var baseUrl = pm.environment.get('baseUrl') || 'http://127.0.0.1:3000';",
+          "    var clientId = pm.environment.get('paypal_client_id');",
+          "    var clientSecret = pm.environment.get('paypal_client_secret');",
+          "    pm.sendRequest({",
+          "        url: baseUrl + '/v1/oauth2/token',",
+          "        method: 'POST',",
+          "        header: { 'Content-Type': 'application/x-www-form-urlencoded' },",
+          "        body: {",
+          "            mode: 'urlencoded',",
+          "            urlencoded: [",
+          "                { key: 'grant_type', value: 'client_credentials' },",
+          "                { key: 'client_id', value: clientId },",
+          "                { key: 'client_secret', value: clientSecret }",
+          "            ]",
+          "        }",
+          "    }, function (err, res) {",
+          "        if (!err && res.code === 200) {",
+          "            var data = res.json();",
+          "            pm.environment.set('current_access_token', data.access_token);",
+          "        }",
+          "    });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "1. OAuth2 Sandbox Token Acquisition",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200 OK', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Response time is less than 500ms', function () {",
+              "    pm.expect(pm.response.responseTime).to.be.below(500);",
+              "});",
+              "",
+              "pm.test('OAuth2 token schema is valid', function () {",
+              "    var jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('access_token');",
+              "    pm.expect(jsonData).to.have.property('token_type');",
+              "    pm.expect(jsonData).to.have.property('expires_in');",
+              "    pm.expect(typeof jsonData.access_token).to.eql('string');",
+              "    pm.expect(jsonData.access_token.length).to.be.above(0);",
+              "});",
+              "",
+              "pm.test('Persist access token to environment variable current_access_token', function () {",
+              "    var jsonData = pm.response.json();",
+              "    pm.environment.set('current_access_token', jsonData.access_token);",
+              "    pm.expect(pm.environment.get('current_access_token')).to.eql(jsonData.access_token);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/x-www-form-urlencoded"
+          }
+        ],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "grant_type",
+              "value": "client_credentials",
+              "type": "text"
+            },
+            {
+              "key": "client_id",
+              "value": "{{paypal_client_id}}",
+              "type": "text"
+            },
+            {
+              "key": "client_secret",
+              "value": "{{paypal_client_secret}}",
+              "type": "text"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/oauth2/token",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "oauth2", "token"]
+        },
+        "description": "Acquire Bearer access token from OAuth2 client credentials endpoint."
+      },
+      "response": []
+    },
+    {
+      "name": "2. AP2 Mandate Verification",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200 OK', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Response time is less than 500ms', function () {",
+              "    pm.expect(pm.response.responseTime).to.be.below(500);",
+              "});",
+              "",
+              "pm.test('Mandate verification schema is valid', function () {",
+              "    var jsonData = pm.response.json();",
+              "    pm.expect(jsonData.valid).to.eql(true);",
+              "    pm.expect(jsonData.status).to.eql('VERIFIED');",
+              "    pm.expect(jsonData).to.have.property('mandate_id');",
+              "    pm.environment.set('mandate_id', jsonData.mandate_id);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{current_access_token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"mandate\": {\n    \"vct\": \"mandate.payment.1\",\n    \"transaction_id\": \"sdjwt_hash_checkout_bound_01\",\n    \"payee\": {\n      \"id\": \"merchant_bestbuy_001\",\n      \"name\": \"Best Buy\",\n      \"website\": \"https://www.bestbuy.com\"\n    },\n    \"payment_amount\": {\n      \"amount\": 24999,\n      \"currency\": \"USD\"\n    },\n    \"payment_instrument\": {\n      \"id\": \"inst_pp_balance_01\",\n      \"type\": \"paypal_balance\",\n      \"description\": \"PayPal Settlement Account\"\n    },\n    \"iat\": 1700000000,\n    \"exp\": 1800000000,\n    \"nonce\": \"ap2_nonce_unique_12345\"\n  },\n  \"signature\": \"304502210089abcd1234ef567890abcdef1234567890abcdef1234567890abcdef1234\",\n  \"signerPublicKey\": \"ed25519_pk_mock_test_01\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/mandates/verify",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "v1", "mandates", "verify"]
+        },
+        "description": "Cryptographically validates Ed25519 signed AP2 payment mandate and checks anti-replay nonces."
+      },
+      "response": []
+    },
+    {
+      "name": "3. Orders v2 Escrow Authorization Hold",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 201 Created', function () {",
+              "    pm.response.to.have.status(201);",
+              "});",
+              "",
+              "pm.test('Response time is less than 500ms', function () {",
+              "    pm.expect(pm.response.responseTime).to.be.below(500);",
+              "});",
+              "",
+              "pm.test('Orders v2 escrow schema is valid', function () {",
+              "    var jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('id');",
+              "    pm.expect(jsonData.intent).to.eql('AUTHORIZE');",
+              "    pm.expect(jsonData.status).to.be.oneOf(['CREATED', 'SAVED', 'APPROVED']);",
+              "    pm.environment.set('order_id', jsonData.id);",
+              "    var authId = jsonData.authorization_id || ('AUTH-' + jsonData.id);",
+              "    pm.environment.set('authorization_id', authId);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{current_access_token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"intent\": \"AUTHORIZE\",\n  \"purchase_units\": [\n    {\n      \"reference_id\": \"tessera-escrow-unit-1\",\n      \"amount\": {\n        \"currency_code\": \"USD\",\n        \"value\": \"249.99\"\n      },\n      \"description\": \"Channel3 Escrow Hold for AP2 Mandate\"\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v2/checkout/orders",
+          "host": ["{{baseUrl}}"],
+          "path": ["v2", "checkout", "orders"]
+        },
+        "description": "Creates PayPal Orders v2 escrow authorization hold with intent: AUTHORIZE."
+      },
+      "response": []
+    },
+    {
+      "name": "4. Webhook Signature Verification",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200 OK', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Response time is less than 500ms', function () {",
+              "    pm.expect(pm.response.responseTime).to.be.below(500);",
+              "});",
+              "",
+              "pm.test('Webhook signature verification status is SUCCESS', function () {",
+              "    var jsonData = pm.response.json();",
+              "    pm.expect(jsonData.verification_status).to.eql('SUCCESS');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{current_access_token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"auth_algo\": \"SHA256withRSA\",\n  \"cert_url\": \"https://api.sandbox.paypal.com/v1/notifications/certs/CERT-12345\",\n  \"transmission_id\": \"trans-uuid-11223344\",\n  \"transmission_sig\": \"MEQCIGMockSignaturePayPalVerification==\",\n  \"transmission_time\": \"2026-10-22T10:00:00Z\",\n  \"webhook_id\": \"WH-99887766\",\n  \"webhook_event\": {\n    \"id\": \"WH-EVT-001\",\n    \"event_type\": \"PAYMENT.AUTHORIZATION.CREATED\",\n    \"resource_type\": \"authorization\",\n    \"summary\": \"Authorization created\"\n  }\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v1/notifications/verify-webhook-signature",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "notifications", "verify-webhook-signature"]
+        },
+        "description": "Verifies cryptographic webhook signature against PayPal certificate."
+      },
+      "response": []
+    },
+    {
+      "name": "5. Shipment Tracking Milestone Check",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200 OK', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Response time is less than 500ms', function () {",
+              "    pm.expect(pm.response.responseTime).to.be.below(500);",
+              "});",
+              "",
+              "pm.test('Tracking milestone status is DELIVERED or IN_TRANSIT', function () {",
+              "    var jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('status');",
+              "    pm.expect(['DELIVERED', 'IN_TRANSIT', 'SHIPPED']).to.include(jsonData.status);",
+              "    if (jsonData.id) {",
+              "        pm.environment.set('tracker_id', jsonData.id);",
+              "    }",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{current_access_token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/v1/shipping/trackers?transaction_id={{order_id}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["v1", "shipping", "trackers"],
+          "query": [
+            {
+              "key": "transaction_id",
+              "value": "{{order_id}}"
+            }
+          ]
+        },
+        "description": "Queries carrier shipment tracking milestone status for the authorized transaction."
+      },
+      "response": []
+    },
+    {
+      "name": "6. Milestone Escrow Capture Release",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 201 Created', function () {",
+              "    pm.response.to.have.status(201);",
+              "});",
+              "",
+              "pm.test('Response time is less than 500ms', function () {",
+              "    pm.expect(pm.response.responseTime).to.be.below(500);",
+              "});",
+              "",
+              "pm.test('Escrow capture schema is valid and COMPLETED', function () {",
+              "    var jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('id');",
+              "    pm.expect(jsonData.status).to.eql('COMPLETED');",
+              "    pm.expect(jsonData.amount.currency_code).to.eql('USD');",
+              "    pm.expect(jsonData.amount.value).to.eql('249.99');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{current_access_token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": {\n    \"currency_code\": \"USD\",\n    \"value\": \"249.99\"\n  },\n  \"final_capture\": true,\n  \"note_to_payer\": \"Milestone delivery verified - escrow release\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v2/payments/authorizations/{{authorization_id}}/capture",
+          "host": ["{{baseUrl}}"],
+          "path": ["v2", "payments", "authorizations", "{{authorization_id}}", "capture"]
+        },
+        "description": "Releases authorized escrow funds to the merchant upon delivery confirmation."
+      },
+      "response": []
+    },
+    {
+      "name": "7. Authorization Void on SLA Breach",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200 OK or 204 No Content', function () {",
+              "    pm.expect(pm.response.code).to.be.oneOf([200, 204]);",
+              "});",
+              "",
+              "pm.test('Response time is less than 500ms', function () {",
+              "    pm.expect(pm.response.responseTime).to.be.below(500);",
+              "});",
+              "",
+              "pm.test('Authorization void status is VOIDED', function () {",
+              "    if (pm.response.code === 200) {",
+              "        var jsonData = pm.response.json();",
+              "        pm.expect(jsonData.status).to.eql('VOIDED');",
+              "    }",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{current_access_token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"reason\": \"SLA delivery deadline exceeded without carrier confirmation\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/v2/payments/authorizations/{{authorization_id}}/void",
+          "host": ["{{baseUrl}}"],
+          "path": ["v2", "payments", "authorizations", "{{authorization_id}}", "void"]
+        },
+        "description": "Voids an authorization hold to immediately unlock and refund buyer escrow funds upon SLA expiration."
+      },
+      "response": []
+    }
+  ]
+}
