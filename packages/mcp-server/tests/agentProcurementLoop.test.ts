@@ -600,4 +600,130 @@ describe("Autonomous Agent Procurement Loop (End-to-End Orchestrator)", () => {
     expect(receivedPayeeMerchantId).toBe("MERC-CUSTOM-SUPPLIER-999");
     expect(receivedPayeeMerchantId).not.toBe("custom-supplier.com");
   });
+
+  it("passes paymentSource to paypalClient.authorizeOrder without waiting for approval", async () => {
+    const buyerKeyPair = generateEd25519KeyPair();
+    const mockProducts = [
+      {
+        id: "item-ps",
+        title: "Payment Source Item",
+        domain: "staples.com",
+        price: 25.0,
+      },
+    ];
+
+    let passedPaymentSource: Record<string, unknown> | undefined;
+    const fakePaymentSource = { vault_id: "vault-token-123" };
+
+    const mockPayPalClient = {
+      createEscrowOrder: async (opts: any) => ({
+        orderId: asOrderId("ORDER-PS-01"),
+        status: "CREATED",
+        amount: opts.amount,
+        links: [],
+        rawResponse: createMockOrderResponse("ORDER-PS-01"),
+      }),
+      authorizeOrder: async (opts: any) => {
+        passedPaymentSource = opts.paymentSource;
+        return {
+          authorizationId: asAuthorizationId("AUTH-PS-01"),
+          orderId: opts.orderId,
+          status: "CREATED",
+          amount: Money.fromDecimalString("25.00", "USD"),
+          rawResponse: createMockOrderResponse("ORDER-PS-01"),
+        };
+      },
+      captureEscrow: async () => ({
+        authorizationId: asAuthorizationId("AUTH-PS-01"),
+        captureId: asCaptureId("CAP-PS-01"),
+        status: "COMPLETED",
+        amount: Money.fromDecimalString("25.00", "USD"),
+        finalCapture: true,
+        capturedAt: new Date().toISOString(),
+        requestId: "req-ps",
+        releaseTrigger: "CARRIER_DELIVERY_PROOF",
+        clearinghouseState: ClearinghouseState.SETTLED,
+        rawResponse: createMockCaptureResponse("CAP-PS-01"),
+      }),
+    };
+
+    const result = await runAgentProcurementLoop({
+      query: "item",
+      maxPrice: 50.0,
+      buyerKeyPair,
+      paymentSource: fakePaymentSource,
+      paypalClient: mockPayPalClient as any,
+      simulateCarrierDelivery: true,
+      searchCatalogFn: async () => createMockCatalogResponse(mockProducts),
+    });
+
+    expect(result.success).toBe(true);
+    expect(passedPaymentSource).toEqual(fakePaymentSource);
+  });
+
+  it("polls getOrder until APPROVED before calling paypalClient.authorizeOrder", async () => {
+    const buyerKeyPair = generateEd25519KeyPair();
+    const mockProducts = [
+      {
+        id: "item-poll",
+        title: "Polling Item",
+        domain: "staples.com",
+        price: 15.0,
+      },
+    ];
+
+    let pollCount = 0;
+    const mockPayPalClient = {
+      createEscrowOrder: async (opts: any) => ({
+        orderId: asOrderId("ORDER-POLL-01"),
+        status: "CREATED",
+        amount: opts.amount,
+        links: [],
+        rawResponse: createMockOrderResponse("ORDER-POLL-01"),
+      }),
+      getOrder: async () => {
+        pollCount++;
+        return {
+          orderId: asOrderId("ORDER-POLL-01"),
+          status: pollCount >= 2 ? ("APPROVED" as const) : ("CREATED" as const),
+          amount: Money.fromDecimalString("15.00", "USD"),
+          links: [],
+          rawResponse: createMockOrderResponse("ORDER-POLL-01"),
+        };
+      },
+      authorizeOrder: async (opts: any) => ({
+        authorizationId: asAuthorizationId("AUTH-POLL-01"),
+        orderId: opts.orderId,
+        status: "CREATED",
+        amount: Money.fromDecimalString("15.00", "USD"),
+        rawResponse: createMockOrderResponse("ORDER-POLL-01"),
+      }),
+      captureEscrow: async () => ({
+        authorizationId: asAuthorizationId("AUTH-POLL-01"),
+        captureId: asCaptureId("CAP-POLL-01"),
+        status: "COMPLETED",
+        amount: Money.fromDecimalString("15.00", "USD"),
+        finalCapture: true,
+        capturedAt: new Date().toISOString(),
+        requestId: "req-poll",
+        releaseTrigger: "CARRIER_DELIVERY_PROOF",
+        clearinghouseState: ClearinghouseState.SETTLED,
+        rawResponse: createMockCaptureResponse("CAP-POLL-01"),
+      }),
+    };
+
+    const result = await runAgentProcurementLoop({
+      query: "item",
+      maxPrice: 50.0,
+      buyerKeyPair,
+      paypalClient: mockPayPalClient as any,
+      approvalPollIntervalMs: 10,
+      approvalTimeoutMs: 1000,
+      simulateCarrierDelivery: true,
+      searchCatalogFn: async () => createMockCatalogResponse(mockProducts),
+    });
+
+    expect(result.success).toBe(true);
+    expect(pollCount).toBeGreaterThanOrEqual(2);
+  });
 });

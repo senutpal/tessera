@@ -106,6 +106,9 @@ export interface AgentProcurementOptions {
   nonceStore?: NonceStore | undefined;
   trackingNumber?: string | undefined;
   carrier?: string | undefined;
+  paymentSource?: Record<string, unknown> | undefined;
+  approvalTimeoutMs?: number | undefined;
+  approvalPollIntervalMs?: number | undefined;
   simulateCarrierDelivery?: boolean | undefined;
   createEscrowOrderFn?: ((options: CreateEscrowOrderOptions) => Promise<EscrowOrder>) | undefined;
   authorizeOrderFn?: ((options: AuthorizeOrderOptions) => Promise<EscrowAuthorization>) | undefined;
@@ -382,10 +385,29 @@ export async function runAgentProcurementLoop(
       if (options.authorizeOrderFn) {
         authorization = await options.authorizeOrderFn({
           orderId: escrowOrder.orderId,
+          ...(options.paymentSource ? { paymentSource: options.paymentSource } : {}),
         });
       } else if (options.paypalClient) {
+        // PayPal requires order status to be APPROVED or a paymentSource before authorizing
+        if (!options.paymentSource && escrowOrder.status !== "APPROVED") {
+          let currentOrder = escrowOrder;
+          const maxWaitMs = options.approvalTimeoutMs ?? 5000;
+          const intervalMs = options.approvalPollIntervalMs ?? 100;
+          const startTime = Date.now();
+          while (currentOrder.status !== "APPROVED") {
+            if (Date.now() - startTime >= maxWaitMs) {
+              throw new Error(
+                `PayPal order ${escrowOrder.orderId} was not approved by buyer within timeout (${maxWaitMs}ms). Current status: ${currentOrder.status}`,
+              );
+            }
+            await new Promise((resolve) => setTimeout(resolve, intervalMs));
+            currentOrder = await options.paypalClient.getOrder(String(escrowOrder.orderId));
+          }
+        }
+
         authorization = await options.paypalClient.authorizeOrder({
           orderId: escrowOrder.orderId,
+          ...(options.paymentSource ? { paymentSource: options.paymentSource } : {}),
         });
       } else {
         const msg = "PayPal authorization handler missing";
