@@ -359,16 +359,11 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
       >
         {/* Minimalist Editorial Toolbar Header */}
         <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/30">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-zinc-400 dark:text-zinc-500" />
-              <h3 className="text-xs font-semibold uppercase tracking-wider font-mono text-zinc-900 dark:text-zinc-100">
-                Procurement Milestone SLA Scheduler
-              </h3>
-            </div>
-            <span className="px-2 py-0.5 rounded text-[10px] font-mono tracking-widest font-semibold bg-zinc-200/80 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300">
-              BRYNTUM GANTT PRO
-            </span>
+          <div className="flex items-center gap-2">
+            <Calendar className="w-4 h-4 text-zinc-400 dark:text-zinc-500" />
+            <h3 className="text-xs font-semibold uppercase tracking-wider font-mono text-zinc-900 dark:text-zinc-100">
+              Procurement Milestone SLA Scheduler
+            </h3>
           </div>
 
           {/* Action Toolbar */}
