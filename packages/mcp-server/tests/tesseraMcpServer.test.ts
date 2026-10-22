@@ -551,6 +551,174 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
       await server.close();
     });
 
+    it("derives escrow amount from signed checkout_jwt cart when explicit amount is omitted", async () => {
+      const keyPair = generateEd25519KeyPair();
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      const cartJwtPayload = {
+        merchant_id: "store.com",
+        cart: {
+          total: 129.95,
+          currency: "USD",
+        },
+      };
+      const validJwt = `header.${Buffer.from(JSON.stringify(cartJwtPayload)).toString("base64url")}.sig`;
+      const checkoutHash = computeCheckoutHash(validJwt);
+
+      const checkoutMandate = {
+        vct: "mandate.checkout.1",
+        checkout_jwt: validJwt,
+        checkout_hash: checkoutHash,
+        iat: nowEpoch,
+        exp: nowEpoch + 3600,
+        nonce: "nonce-derived-amount",
+      };
+
+      const signed = signMandate(checkoutMandate, keyPair.privateKey, keyPair.publicKey);
+
+      let capturedAmount: Money | undefined;
+      const server = new TesseraMcpServer({
+        createEscrowOrderFn: async (opts) => {
+          const money = toMoney(opts.amount);
+          capturedAmount = money;
+          return {
+            orderId: asOrderId("ORDER-DERIVED-1"),
+            status: "CREATED",
+            amount: money,
+            links: [],
+            rawResponse: createMockOrderResponse("ORDER-DERIVED-1"),
+          };
+        },
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_submit_mandate",
+        arguments: {
+          signed_mandate: {
+            mandate: checkoutMandate,
+            signature: signed.signature,
+            signerPublicKey: keyPair.publicKey,
+          },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(capturedAmount?.toDecimalString()).toBe("129.95");
+      expect(capturedAmount?.currency).toBe("USD");
+
+      await client.close();
+      await server.close();
+    });
+
+    it("rejects CheckoutMandate when supplied amount conflicts with signed checkout_jwt cart total", async () => {
+      const keyPair = generateEd25519KeyPair();
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      const cartJwtPayload = {
+        cart: {
+          total: 129.95,
+          currency: "USD",
+        },
+      };
+      const validJwt = `header.${Buffer.from(JSON.stringify(cartJwtPayload)).toString("base64url")}.sig`;
+      const checkoutHash = computeCheckoutHash(validJwt);
+
+      const checkoutMandate = {
+        vct: "mandate.checkout.1",
+        checkout_jwt: validJwt,
+        checkout_hash: checkoutHash,
+        iat: nowEpoch,
+        exp: nowEpoch + 3600,
+        nonce: "nonce-mismatch-amt",
+      };
+
+      const signed = signMandate(checkoutMandate, keyPair.privateKey, keyPair.publicKey);
+
+      const server = new TesseraMcpServer();
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_submit_mandate",
+        arguments: {
+          signed_mandate: {
+            mandate: checkoutMandate,
+            signature: signed.signature,
+            signerPublicKey: keyPair.publicKey,
+          },
+          amount: 50.0,
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = getTextContent(result);
+      expect(text).toContain("Cart amount mismatch");
+
+      await client.close();
+      await server.close();
+    });
+
+    it("rejects CheckoutMandate when policyEngine is configured because policyEngine only evaluates PaymentMandate", async () => {
+      const policyEngine = new PolicyEngine({
+        maxAmountPerTransaction: Money.fromDecimalString("100.00", "USD"),
+        maxVelocity24h: Money.fromDecimalString("500.00", "USD"),
+        allowedMerchantDomains: ["approved-merchant.com"],
+        autoApprovalLimit: Money.fromDecimalString("50.00", "USD"),
+        hitlRiskThreshold: 70,
+        authorizedSupervisorPublicKeys: ["0".repeat(64)],
+      });
+
+      const server = new TesseraMcpServer({
+        policyEngine,
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const keyPair = generateEd25519KeyPair();
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      const fakeJwt = "header.payload.signature";
+      const checkoutHash = computeCheckoutHash(fakeJwt);
+
+      const checkoutMandate = {
+        vct: "mandate.checkout.1",
+        checkout_jwt: fakeJwt,
+        checkout_hash: checkoutHash,
+        iat: nowEpoch,
+        exp: nowEpoch + 3600,
+        nonce: "nonce-checkout-policy",
+      };
+
+      const signed = signMandate(checkoutMandate, keyPair.privateKey, keyPair.publicKey);
+
+      const result = await client.callTool({
+        name: "tessera_submit_mandate",
+        arguments: {
+          signed_mandate: {
+            mandate: checkoutMandate,
+            signature: signed.signature,
+            signerPublicKey: keyPair.publicKey,
+          },
+          amount: 25.0,
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = getTextContent(result);
+      expect(text).toContain("Spending policy violation");
+      expect(text).toContain("CheckoutMandate cannot bypass policy enforcement");
+
+      await client.close();
+      await server.close();
+    });
+
     it("enforces replay protection by default using InMemoryNonceStore", async () => {
       const keyPair = generateEd25519KeyPair();
       const nowEpoch = Math.floor(Date.now() / 1000);
