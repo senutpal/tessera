@@ -82,49 +82,69 @@ describe("Ticket 11.3: SLA Breach & Delay Warning Engine (slaMonitor)", () => {
       expect(transitWarning?.actionRecommended).toBe("STAGE_PAYPAL_DISPUTE");
     });
 
-    it("detects DELIVERY_DELAYED carrier tracking status from PayPal Tracking v1", () => {
-      const tasks = mapRecordToGanttTasks({
+    it("detects DELIVERY_DELAYED carrier tracking status directly from clearinghouse record via evaluateRecordSla", () => {
+      const recordWithCarrierDelay = {
         ...baseRecord,
-        escrowStatus: "IN_TRANSIT",
+        escrowStatus: "IN_TRANSIT" as const,
         trackingId: "UPS-9941",
         carrier: "UPS",
-      });
+        carrierStatus: "DELIVERY_DELAYED",
+      };
 
-      // Inject PayPal OpenAPI status
-      const transitTask = tasks.find((t) => t.stage === "IN_TRANSIT");
-      if (!transitTask) {
-        throw new Error("Expected IN_TRANSIT task to exist");
-      }
-      transitTask.carrierStatus = "DELIVERY_DELAYED";
+      const result = evaluateRecordSla(
+        recordWithCarrierDelay as unknown as ClearinghouseRecord,
+        new Date("2026-10-18T12:00:00.000Z"),
+      );
 
-      const warnings = evaluateGanttTasksSla(tasks, new Date("2026-10-18T12:00:00.000Z"));
-      const delayWarning = warnings.find((w) => w.stage === "IN_TRANSIT");
-
+      expect(result.isBreached).toBe(true);
+      const delayWarning = result.warnings.find((w) => w.stage === "IN_TRANSIT");
       expect(delayWarning).toBeDefined();
       expect(delayWarning?.severity).toBe("WARNING");
       expect(delayWarning?.message).toContain("Carrier reported delivery delay");
       expect(delayWarning?.carrierStatus).toBe("DELIVERY_DELAYED");
+      expect(delayWarning?.actionRecommended).toBe("NOTIFY_BUYER");
     });
 
-    it("detects ON_HOLD and PICKUP_FAILED carrier tracking statuses", () => {
-      const tasks = mapRecordToGanttTasks({
+    it("detects ON_HOLD and PICKUP_FAILED carrier tracking statuses directly on records", () => {
+      const recordOnHold = {
         ...baseRecord,
-        escrowStatus: "IN_TRANSIT",
+        escrowStatus: "IN_TRANSIT" as const,
         trackingId: "DHL-5521",
         carrier: "DHL",
-      });
+        carrierStatus: "ON_HOLD",
+      };
 
-      const transitTask = tasks.find((t) => t.stage === "IN_TRANSIT");
-      if (!transitTask) {
-        throw new Error("Expected IN_TRANSIT task to exist");
-      }
-      transitTask.carrierStatus = "ON_HOLD";
-
-      const warnings = evaluateGanttTasksSla(tasks, new Date("2026-10-18T12:00:00.000Z"));
-      const holdWarning = warnings.find((w) => w.stage === "IN_TRANSIT");
+      const result = evaluateRecordSla(
+        recordOnHold as unknown as ClearinghouseRecord,
+        new Date("2026-10-18T12:00:00.000Z"),
+      );
+      const holdWarning = result.warnings.find((w) => w.stage === "IN_TRANSIT");
 
       expect(holdWarning).toBeDefined();
       expect(holdWarning?.message).toContain("on hold");
+      expect(holdWarning?.actionRecommended).toBe("SUPERVISOR_REVIEW");
+    });
+
+    it("flags CRITICAL warning and stages PayPal dispute when carrier tracking status is CANCELLED", () => {
+      const recordCancelled = {
+        ...baseRecord,
+        escrowStatus: "IN_TRANSIT" as const,
+        trackingId: "FEDEX-CANCEL-99",
+        carrier: "FedEx",
+        carrierStatus: "CANCELLED",
+      };
+
+      const result = evaluateRecordSla(
+        recordCancelled as unknown as ClearinghouseRecord,
+        new Date("2026-10-18T12:00:00.000Z"),
+      );
+
+      expect(result.isBreached).toBe(true);
+      const cancelWarning = result.warnings.find((w) => w.stage === "IN_TRANSIT");
+      expect(cancelWarning).toBeDefined();
+      expect(cancelWarning?.severity).toBe("CRITICAL");
+      expect(cancelWarning?.message).toContain("cancelled by carrier");
+      expect(cancelWarning?.actionRecommended).toBe("STAGE_PAYPAL_DISPUTE");
     });
 
     it("produces no warnings when carrier status is DELIVERED or COMPLETED", () => {

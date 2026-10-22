@@ -14,6 +14,19 @@ import {
 import type { ClearinghouseRecord } from "../../types.js";
 
 /**
+ * Safely parses any date-like input to a valid Date object, falling back if invalid or NaN.
+ */
+export function parseDateSafe(dateVal: unknown, fallback: Date = new Date()): Date {
+  if (!dateVal) return fallback;
+  if (dateVal instanceof Date && !Number.isNaN(dateVal.getTime())) return dateVal;
+  if (typeof dateVal === "string" || typeof dateVal === "number") {
+    const d = new Date(dateVal);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return fallback;
+}
+
+/**
  * Computes date arithmetic adding fractional hours to a Date
  */
 function addHours(date: Date, hours: number): Date {
@@ -124,9 +137,12 @@ export function mapRecordToGanttTasks(
   record: ClearinghouseRecord,
   options?: GanttMapperOptions,
 ): ProcurementGanttTask[] {
-  const createdDate = new Date(record.createdAt || Date.now());
-  const updatedDate = new Date(record.updatedAt || record.createdAt || Date.now());
-  const refDate = options?.referenceDate ? new Date(options.referenceDate) : updatedDate;
+  const fallbackNow = new Date();
+  const createdDate = parseDateSafe(record.createdAt, fallbackNow);
+  const updatedDate = parseDateSafe(record.updatedAt, createdDate);
+  const refDate = options?.referenceDate
+    ? parseDateSafe(options.referenceDate, updatedDate)
+    : updatedDate;
 
   let currentBaselineStart = createdDate;
   let currentActualStart = createdDate;
@@ -159,8 +175,19 @@ export function mapRecordToGanttTasks(
     let actualDurationHours: number;
 
     if (status === "COMPLETED") {
-      actualEnd = addHours(actualStart, def.baselineDurationHours);
-      actualDurationHours = def.baselineDurationHours;
+      let durationHours = def.baselineDurationHours;
+      if (
+        (stage === "MERCHANT_DISPATCH" &&
+          (record.trackingId || record.escrowStatus === "IN_TRANSIT")) ||
+        (stage === "ESCROW_CAPTURED" && record.captureId)
+      ) {
+        const measuredElapsed = (updatedDate.getTime() - actualStart.getTime()) / (3600 * 1000);
+        if (measuredElapsed > 0.05 && measuredElapsed < 10000) {
+          durationHours = Math.round(measuredElapsed * 10) / 10;
+        }
+      }
+      actualDurationHours = durationHours;
+      actualEnd = addHours(actualStart, actualDurationHours);
       currentActualStart = actualEnd;
     } else if (status === "IN_PROGRESS") {
       const elapsedHours = Math.max(
@@ -179,14 +206,20 @@ export function mapRecordToGanttTasks(
 
     const taskId = `${record.transactionId}-${stage}`;
 
-    // Detect carrier tracking status if present
-    const carrierStatus: CarrierTrackingStatus | undefined =
+    // Detect carrier tracking status if present on record or fallback to escrow status
+    const rawCarrierStatus =
+      (record as Record<string, unknown>).carrierStatus ||
+      (record as Record<string, unknown>).carrier_status ||
+      (record as Record<string, unknown>).trackingStatus;
+
+    const carrierStatus: CarrierTrackingStatus | string | undefined =
       stage === "IN_TRANSIT"
-        ? record.escrowStatus === "IN_TRANSIT"
-          ? "IN_TRANSIT"
-          : record.escrowStatus === "DELIVERED_CAPTURED"
-            ? "DELIVERED"
-            : undefined
+        ? (rawCarrierStatus as CarrierTrackingStatus) ||
+          (record.escrowStatus === "IN_TRANSIT"
+            ? "IN_TRANSIT"
+            : record.escrowStatus === "DELIVERED_CAPTURED"
+              ? "DELIVERED"
+              : undefined)
         : undefined;
 
     tasks.push({
@@ -238,8 +271,7 @@ export function mapRecordToGanttDependencies(
       fromEvent: fromId,
       toEvent: toId,
       type: BryntumDependencyType.FinishToStart,
-      type_val: 2,
-    } as unknown as ProcurementGanttDependency);
+    });
   }
 
   return dependencies;
@@ -254,9 +286,9 @@ export function calculateCriticalPath(
   tasks: ProcurementGanttTask[],
   _dependencies?: ProcurementGanttDependency[],
 ): string[] {
-  // If all tasks are completed or voided, critical path is empty
+  // If all tasks are completed, voided, or breached (aborted order), critical path is empty
   const allCompletedOrClosed = tasks.every(
-    (t) => t.status === "COMPLETED" || t.status === "VOIDED",
+    (t) => t.status === "COMPLETED" || t.status === "VOIDED" || t.status === "BREACHED",
   );
   if (allCompletedOrClosed) {
     return [];
@@ -278,7 +310,7 @@ export function calculateCriticalPath(
   const criticalIds: string[] = [];
   for (let i = firstActiveIndex; i < tasks.length; i++) {
     const task = tasks[i];
-    if (task.status !== "VOIDED") {
+    if (task.status !== "VOIDED" && task.status !== "BREACHED") {
       criticalIds.push(task.id);
     }
   }

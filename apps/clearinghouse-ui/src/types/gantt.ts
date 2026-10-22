@@ -208,7 +208,7 @@ export interface ProcurementGanttDependency {
   to: string;
   fromEvent?: string | undefined;
   toEvent?: string | undefined;
-  type: 2 | BryntumDependencyType.FinishToStart;
+  type: 2 | BryntumDependencyType | number;
   cls?: string | undefined;
   lag?: number | undefined;
   lagUnit?: "h" | "d" | undefined;

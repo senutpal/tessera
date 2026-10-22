@@ -83,6 +83,9 @@ export interface ProcurementGanttProps {
   onTaskClick?: (task: ProcurementGanttTask) => void;
   className?: string;
   onSlaWarning?: (warning: SlaDelayWarning) => void;
+  referenceDate?: Date | string | undefined;
+  maxVisibleRecords?: number | undefined;
+  ganttInstanceFactory?: ((config?: Record<string, unknown>) => BryntumGanttInstance) | undefined;
 }
 
 export interface ProcurementGanttHandle {
@@ -105,6 +108,9 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
       onTaskClick,
       className = "",
       onSlaWarning,
+      referenceDate,
+      maxVisibleRecords = 25,
+      ganttInstanceFactory,
     },
     ref,
   ) => {
@@ -112,9 +118,14 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
     const ganttInstanceRef = useRef<BryntumGanttInstance | null>(null);
     const [internalCriticalPath, setInternalCriticalPath] = useState<boolean>(false);
     const [zoomLevel, setZoomLevel] = useState<number>(100);
+    const [visibleCount, setVisibleCount] = useState<number>(maxVisibleRecords);
 
     const isCriticalPathActive =
       controlledShowCriticalPath !== undefined ? controlledShowCriticalPath : internalCriticalPath;
+
+    const effectiveRefDate = useMemo(() => {
+      return referenceDate ? new Date(referenceDate) : undefined;
+    }, [referenceDate]);
 
     // Filter records if a specific transaction is isolated
     const filteredRecords = useMemo(() => {
@@ -127,24 +138,29 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
       return mapRecordsToGanttProject(filteredRecords, {
         calculateCriticalPath: isCriticalPathActive,
         includeSummaryRoot: true,
+        referenceDate: effectiveRefDate,
       });
-    }, [filteredRecords, isCriticalPathActive]);
+    }, [filteredRecords, isCriticalPathActive, effectiveRefDate]);
 
     // Evaluate SLA warnings across loaded records
     const slaWarnings: SlaDelayWarning[] = useMemo(() => {
       const warnings: SlaDelayWarning[] = [];
       for (const rec of filteredRecords) {
-        const result = evaluateRecordSla(rec);
+        const result = evaluateRecordSla(rec, effectiveRefDate);
         warnings.push(...result.warnings);
       }
       return warnings;
-    }, [filteredRecords]);
+    }, [filteredRecords, effectiveRefDate]);
 
-    // Notify parent on SLA warning changes
+    // Notify parent on SLA warning changes without infinite loops
+    const reportedWarningsRef = useRef<Set<string>>(new Set());
     useEffect(() => {
       if (onSlaWarning && slaWarnings.length > 0) {
         for (const warn of slaWarnings) {
-          onSlaWarning(warn);
+          if (!reportedWarningsRef.current.has(warn.id)) {
+            reportedWarningsRef.current.add(warn.id);
+            onSlaWarning(warn);
+          }
         }
       }
     }, [slaWarnings, onSlaWarning]);
@@ -230,7 +246,8 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
       ],
     );
 
-    // Bryntum Gantt Lifecycle Management with clean unmount disposal
+    // Effect 1: Bryntum Gantt Lifecycle Management (Mount and clean unmount disposal)
+    // biome-ignore lint/correctness/useExhaustiveDependencies: Gantt instance is instantiated once on mount; subsequent data updates handled in dedicated effect
     useEffect(() => {
       let isMounted = true;
 
@@ -239,31 +256,21 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
         if (typeof window === "undefined" || typeof document === "undefined") return;
 
         try {
-          if (!BryntumGanttClass) {
+          if (!ganttInstanceFactory && !BryntumGanttClass) {
             const mod = await import("@bryntum/gantt");
             BryntumGanttClass = mod.Gantt as unknown as GanttConstructor;
           }
 
-          if (!isMounted || !BryntumGanttClass || !ganttContainerRef.current) return;
-
-          // If instance already exists, update data instead of re-instantiating
-          if (ganttInstanceRef.current) {
-            try {
-              if (ganttInstanceRef.current.project) {
-                ganttInstanceRef.current.project.tasksData = projectData.tasksData;
-                ganttInstanceRef.current.project.dependenciesData = projectData.dependenciesData;
-              }
-              if (ganttInstanceRef.current.features?.criticalPaths) {
-                ganttInstanceRef.current.features.criticalPaths.disabled = !isCriticalPathActive;
-              }
-            } catch {
-              // fallback
-            }
+          if (
+            !isMounted ||
+            (!ganttInstanceFactory && !BryntumGanttClass) ||
+            !ganttContainerRef.current ||
+            ganttInstanceRef.current
+          ) {
             return;
           }
 
-          // Create Bryntum Gantt instance
-          const gantt = new BryntumGanttClass({
+          const ganttConfig = {
             appendTo: ganttContainerRef.current,
             autoHeight: true,
             features: {
@@ -292,7 +299,11 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
               tasksData: projectData.tasksData,
               dependenciesData: projectData.dependenciesData,
             },
-          });
+          };
+
+          const gantt = ganttInstanceFactory
+            ? ganttInstanceFactory(ganttConfig)
+            : new (BryntumGanttClass as GanttConstructor)(ganttConfig);
 
           ganttInstanceRef.current = gantt;
         } catch {
@@ -316,6 +327,22 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
           ganttInstanceRef.current = null;
         }
       };
+    }, [ganttInstanceFactory]);
+
+    // Effect 2: Update existing Gantt instance data & features smoothly without re-instantiation
+    useEffect(() => {
+      if (!ganttInstanceRef.current) return;
+      try {
+        if (ganttInstanceRef.current.project) {
+          ganttInstanceRef.current.project.tasksData = projectData.tasksData;
+          ganttInstanceRef.current.project.dependenciesData = projectData.dependenciesData;
+        }
+        if (ganttInstanceRef.current.features?.criticalPaths) {
+          ganttInstanceRef.current.features.criticalPaths.disabled = !isCriticalPathActive;
+        }
+      } catch {
+        // ignore update errors
+      }
     }, [projectData, isCriticalPathActive]);
 
     const isLight = theme === "light";
@@ -431,7 +458,7 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
           </div>
 
           <div className="flex flex-col gap-2">
-            {projectData.tasksData.map((rootTask) => {
+            {projectData.tasksData.slice(0, visibleCount).map((rootTask) => {
               const children = rootTask.children || [];
               const orderSlaBreached = slaWarnings.some((w) => w.transactionId === rootTask.id);
 
@@ -537,6 +564,19 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
                 </div>
               );
             })}
+
+            {projectData.tasksData.length > visibleCount && (
+              <div className="flex justify-center pt-2">
+                <button
+                  type="button"
+                  data-testid="show-more-orders-btn"
+                  onClick={() => setVisibleCount((prev) => prev + 25)}
+                  className="px-4 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-xs font-mono font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 transition-colors shadow-sm"
+                >
+                  Show More Orders ({visibleCount} of {projectData.tasksData.length})
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>
