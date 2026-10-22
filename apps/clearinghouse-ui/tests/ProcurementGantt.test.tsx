@@ -272,6 +272,124 @@ describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (Procurement
       const container = screen.getByTestId("procurement-gantt");
       expect(container.className).toContain("dark:bg-[#09090b]");
     });
+
+    it("applies b-theme-stockholm-dark dark to the gantt container element when theme='dark'", () => {
+      render(<ProcurementGantt records={[mockRecord1]} theme="dark" />);
+      const ganttHost = screen.getByTestId("gantt-container");
+      expect(ganttHost.className).toContain("b-theme-stockholm-dark");
+      expect(ganttHost.className).toContain("dark");
+    });
+
+    it("applies b-theme-stockholm-light to the gantt container element when theme='light'", () => {
+      render(<ProcurementGantt records={[mockRecord1]} theme="light" />);
+      const ganttHost = screen.getByTestId("gantt-container");
+      expect(ganttHost.className).toContain("b-theme-stockholm-light");
+      expect(ganttHost.className).not.toContain("b-theme-stockholm-dark");
+    });
+
+    it("updates gantt instance element theme classes dynamically when theme prop toggles", () => {
+      const mockElement = document.createElement("div");
+      const mockGanttInstance = {
+        destroy: vi.fn(),
+        isDestroyed: false,
+        element: mockElement,
+      };
+      const factory = vi.fn().mockReturnValue(mockGanttInstance);
+
+      const { rerender } = render(
+        <ProcurementGantt records={[mockRecord1]} theme="dark" ganttInstanceFactory={factory} />,
+      );
+
+      expect(mockElement.classList.contains("b-theme-stockholm-dark")).toBe(true);
+
+      rerender(
+        <ProcurementGantt records={[mockRecord1]} theme="light" ganttInstanceFactory={factory} />,
+      );
+
+      expect(mockElement.classList.contains("b-theme-stockholm-light")).toBe(true);
+      expect(mockElement.classList.contains("b-theme-stockholm-dark")).toBe(false);
+    });
+  });
+
+  describe("Live Streaming Stabilization & Jitter Prevention", () => {
+    it("configures transitionDuration: 0 and disables projectLines in ganttConfig to eliminate flickering", () => {
+      let capturedConfig:
+        | {
+            transitionDuration?: number;
+            cls?: string;
+            features?: {
+              projectLines?: { disabled: boolean };
+              criticalPaths?: { disabled: boolean };
+            };
+          }
+        | undefined;
+
+      const factory = vi.fn().mockImplementation((config) => {
+        capturedConfig = config;
+        return {
+          destroy: vi.fn(),
+          isDestroyed: false,
+        };
+      });
+
+      render(
+        <ProcurementGantt records={[mockRecord1]} theme="dark" ganttInstanceFactory={factory} />,
+      );
+
+      expect(capturedConfig).toBeDefined();
+      expect(capturedConfig?.transitionDuration).toBe(0);
+      expect(capturedConfig?.features?.projectLines?.disabled).toBe(true);
+      expect(capturedConfig?.cls).toContain("b-theme-stockholm-dark dark");
+    });
+
+    it("keeps effective referenceDate stable across rapid re-renders to prevent elapsed duration bar drift", () => {
+      let firstCapturedTasks:
+        | Array<{ duration: number; startDate: string; endDate: string }>
+        | undefined;
+      let secondCapturedTasks:
+        | Array<{ duration: number; startDate: string; endDate: string }>
+        | undefined;
+
+      const mockLoadInlineData = vi.fn();
+      const factory = vi.fn().mockImplementation((config) => {
+        firstCapturedTasks = config.project.tasksData[0]?.children;
+        return {
+          destroy: vi.fn(),
+          isDestroyed: false,
+          project: {
+            loadInlineData: mockLoadInlineData,
+          },
+        };
+      });
+
+      const { rerender } = render(
+        <ProcurementGantt records={[mockRecord1]} ganttInstanceFactory={factory} />,
+      );
+
+      // Re-render with updated record (simulating streaming tick)
+      const updatedRecord: ClearinghouseRecord = {
+        ...mockRecord1,
+        riskScore: 25,
+        sequenceNumber: 102,
+        updatedAt: new Date(Date.now() + 3000).toISOString(),
+      };
+
+      rerender(<ProcurementGantt records={[updatedRecord]} ganttInstanceFactory={factory} />);
+
+      expect(mockLoadInlineData).toHaveBeenCalled();
+      const lastCall = mockLoadInlineData.mock.calls[mockLoadInlineData.mock.calls.length - 1][0];
+      secondCapturedTasks = lastCall.tasksData[0]?.children;
+
+      expect(firstCapturedTasks).toBeDefined();
+      expect(secondCapturedTasks).toBeDefined();
+
+      // Verify task durations and start dates have not jittered
+      for (let i = 0; i < (firstCapturedTasks?.length ?? 0); i++) {
+        expect(secondCapturedTasks?.[i]?.duration).toBe(firstCapturedTasks?.[i]?.duration);
+        expect(secondCapturedTasks?.[i]?.startDate).toBe(firstCapturedTasks?.[i]?.startDate);
+        expect(secondCapturedTasks?.[i]?.endDate).toBe(firstCapturedTasks?.[i]?.endDate);
+      }
+    });
   });
 
   describe("Lifecycle Disposal & Memory Safety", () => {

@@ -233,3 +233,138 @@ body {
   border-color: rgba(255, 255, 255, 0.3);
   outline: none;
 }
+
+/* Bryntum Gantt Dark Theme: Tessera Obsidian Financial Palette */
+.b-theme-stockholm-dark,
+.dark .b-gantt,
+.dark .b-grid,
+.dark.b-theme-stockholm-dark,
+.dark .b-theme-stockholm-dark {
+  --b-widget-color-scheme: dark;
+  --b-mix: #09090b;
+  --b-opposite: #f4f4f5;
+  --b-panel-background: #09090b;
+  --b-grid-background: #09090b;
+  --b-grid-header-background: #0e0e11;
+  --b-grid-header-color: #a1a1aa;
+  --b-grid-header-border-color: #27272a;
+  --b-grid-cell-color: #f4f4f5;
+  --b-grid-cell-border-color: #18181b;
+  --b-grid-cell-hover-background: #131317;
+  --b-grid-cell-selected-background: rgba(255, 255, 255, 0.05);
+  --b-widget-border-color: #27272a;
+  --b-widget-color: #f4f4f5;
+  --b-stripe-odd-color: #0c0c0e;
+  --b-column-lines-tick-color: #18181b;
+  --b-toolbar-background: #0e0e11;
+  --b-popup-background: #0f0f13;
+  --b-tooltip-rich-background: #0f0f13;
+  --b-tooltip-plain-background: #0f0f13;
+  --b-splitter-color: #27272a;
+  --b-neutral-100: #09090b;
+  --b-neutral-98: #0c0c0e;
+  --b-neutral-95: #0e0e11;
+  --b-neutral-90: #18181b;
+  --b-neutral-80: #27272a;
+  --b-neutral-50: #71717a;
+  --b-neutral-20: #a1a1aa;
+  --b-neutral-10: #f4f4f5;
+  background-color: #09090b;
+  color: #f4f4f5;
+  border-color: #27272a;
+}
+
+/* Core Container & Subgrids */
+.dark .b-gantt,
+.dark .b-grid,
+.dark .b-gantt-host,
+.dark .b-timeline-subgrid,
+.dark .b-grid-subgrids,
+.dark .b-grid-subgrid,
+.dark .b-time-axis-sub-grid,
+.dark .b-timeline-sub-grid,
+.dark .b-grid-panel-body {
+  background-color: #09090b;
+  color: #f4f4f5;
+  border-color: #27272a;
+}
+
+/* Header & Time Axis */
+.dark .b-grid-header-container,
+.dark .b-grid-headers,
+.dark .b-grid-header,
+.dark .b-timeaxishdr,
+.dark .b-sch-time-axis-column,
+.dark .b-sch-header-time-axis-cell,
+.dark .b-time-axis-cell {
+  background-color: #0e0e11;
+  color: #a1a1aa;
+  border-color: #27272a;
+}
+
+.dark .b-timeaxishdr {
+  background-color: #0e0e11;
+  border-bottom: 1px solid #27272a;
+}
+
+.dark .b-sch-time-axis-cell,
+.dark .b-timeaxishdr .b-sch-header-time-axis-cell,
+.dark .b-timeaxishdr .b-time-axis-cell {
+  background-color: #0e0e11;
+  color: #a1a1aa;
+  border-color: #27272a;
+}
+
+/* Grid Rows & Alternating Rows */
+.dark .b-grid-row {
+  background-color: #09090b;
+  color: #f4f4f5;
+  border-bottom: 1px solid #18181b;
+}
+
+.dark .b-grid-row.b-stripe,
+.dark .b-grid-row:nth-child(even) {
+  background-color: #0c0c0e;
+}
+
+.dark .b-grid-row.b-hover,
+.dark .b-grid-row:hover {
+  background-color: #131317;
+}
+
+.dark .b-grid-row.b-selected {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+/* Grid Cells */
+.dark .b-grid-cell {
+  color: #f4f4f5;
+  border-right: 1px solid #18181b;
+}
+
+/* Grid Splitter */
+.dark .b-grid-splitter,
+.dark .b-splitter {
+  background-color: #18181b;
+  border-color: #27272a;
+}
+
+/* Column Lines & Grid Lines */
+.dark .b-column-line,
+.dark .b-sch-column-line,
+.dark .b-time-axis-tick {
+  border-color: #18181b;
+}
+
+/* Tooltip & Popups */
+.dark .b-tooltip,
+.dark .b-popup {
+  background-color: #0f0f13;
+  color: #f4f4f5;
+  border: 1px solid #27272a;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+
+.dark .b-sch-non-working-time {
+  background-color: rgba(255, 255, 255, 0.02);
+}

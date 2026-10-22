@@ -172,6 +172,7 @@ export interface ProcurementGanttTask {
   baselines?: GanttBaseline[] | undefined;
   children?: ProcurementGanttTask[] | undefined;
   expanded?: boolean | undefined;
+  manuallyScheduled?: boolean | undefined;
   // Domain metadata
   merchantDomain?: string | undefined;
   carrier?: string | undefined;

@@ -137,12 +137,13 @@ export function mapRecordToGanttTasks(
   record: ClearinghouseRecord,
   options?: GanttMapperOptions,
 ): ProcurementGanttTask[] {
-  const fallbackNow = new Date();
-  const createdDate = parseDateSafe(record.createdAt, fallbackNow);
-  const updatedDate = parseDateSafe(record.updatedAt, createdDate);
+  const fallbackDate = record.timestampMicros
+    ? new Date(Math.floor(record.timestampMicros / 1000))
+    : new Date("2026-10-21T00:00:00.000Z");
+  const createdDate = parseDateSafe(record.createdAt, fallbackDate);
   const refDate = options?.referenceDate
-    ? parseDateSafe(options.referenceDate, updatedDate)
-    : updatedDate;
+    ? parseDateSafe(options.referenceDate, createdDate)
+    : createdDate;
 
   let currentBaselineStart = createdDate;
   let currentActualStart = createdDate;
@@ -231,6 +232,7 @@ export function mapRecordToGanttTasks(
       carrierStatus,
       riskScore: record.riskScore,
       disputeReason: record.disputeReason,
+      manuallyScheduled: true,
     });
   }
 
@@ -388,6 +390,7 @@ export function mapRecordToGanttProject(
       riskScore: record.riskScore,
       carrier: record.carrier,
       trackingId: record.trackingId,
+      manuallyScheduled: true,
     };
 
     return {

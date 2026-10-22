@@ -23,16 +23,18 @@ import type {
   SlaDelayWarning,
 } from "../../types/gantt.js";
 import type { ClearinghouseRecord } from "../../types.js";
-import { mapRecordsToGanttProject } from "./ganttDataMapper.js";
+import { mapRecordsToGanttProject, parseDateSafe } from "./ganttDataMapper.js";
 import { evaluateRecordSla } from "./slaMonitor.js";
 
 export interface BryntumGanttInstance {
   destroy: () => void;
   isDestroyed?: boolean;
+  element?: HTMLElement;
   features?: {
     criticalPaths?: { disabled: boolean };
     baselines?: { disabled: boolean };
     dependencies?: { disabled: boolean };
+    projectLines?: { disabled: boolean };
   };
   project?: {
     tasksData: unknown;
@@ -123,8 +125,16 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
     const isCriticalPathActive =
       controlledShowCriticalPath !== undefined ? controlledShowCriticalPath : internalCriticalPath;
 
+    const initialReferenceDateRef = useRef<Date | null>(null);
+    if (!initialReferenceDateRef.current) {
+      initialReferenceDateRef.current = new Date();
+    }
+
     const effectiveRefDate = useMemo(() => {
-      return referenceDate ? new Date(referenceDate) : new Date();
+      if (referenceDate) {
+        return parseDateSafe(referenceDate, initialReferenceDateRef.current ?? new Date());
+      }
+      return initialReferenceDateRef.current ?? new Date();
     }, [referenceDate]);
 
     // Filter records if a specific transaction is isolated
@@ -291,10 +301,13 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
           const ganttConfig = {
             appendTo: ganttContainerRef.current,
             autoHeight: true,
+            transitionDuration: 0,
+            cls: theme === "dark" ? "b-theme-stockholm-dark dark" : "b-theme-stockholm-light",
             features: {
               criticalPaths: { disabled: !isCriticalPathActive },
               baselines: { disabled: false },
               dependencies: { disabled: false },
+              projectLines: { disabled: true },
               taskTooltip: {
                 template: (data?: {
                   taskRecord?:
@@ -389,6 +402,20 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
         // ignore update errors
       }
     }, [projectData, isCriticalPathActive]);
+
+    // Effect 3: Sync theme classes on existing Gantt element when theme prop changes dynamically
+    useEffect(() => {
+      const gantt = ganttInstanceRef.current as { element?: HTMLElement } | null;
+      if (gantt?.element) {
+        if (theme === "dark") {
+          gantt.element.classList.add("b-theme-stockholm-dark", "dark");
+          gantt.element.classList.remove("b-theme-stockholm-light");
+        } else {
+          gantt.element.classList.add("b-theme-stockholm-light");
+          gantt.element.classList.remove("b-theme-stockholm-dark", "dark");
+        }
+      }
+    }, [theme]);
 
     const isLight = theme === "light";
     const criticalTaskCount = projectData.criticalPathTaskIds.length;
@@ -487,7 +514,10 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
         {/* Bryntum Gantt DOM Container */}
         <div
           ref={ganttContainerRef}
-          className="b-gantt-host min-h-[380px] flex-1 w-full overflow-hidden"
+          data-testid="gantt-container"
+          className={`b-gantt-host min-h-[380px] flex-1 w-full overflow-hidden ${
+            theme === "dark" ? "b-theme-stockholm-dark dark" : "b-theme-stockholm-light"
+          }`}
         />
 
         {/* Accessible Timeline Presentation Layer (Provides structured task bar visual inspection) */}

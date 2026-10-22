@@ -138,6 +138,13 @@ describe("Ticket 11.1: Procurement Task Data Model & State Mapper (ganttDataMapp
       expect(inTransitTask?.merchantDomain).toBe("stripe.com");
       expect(inTransitTask?.riskScore).toBe(45);
     });
+
+    it("sets manuallyScheduled: true on all child milestone tasks to prevent ChronoGraph re-snapping", () => {
+      const tasks = mapRecordToGanttTasks(mockSampleRecordAuthorized);
+      for (const task of tasks) {
+        expect(task.manuallyScheduled).toBe(true);
+      }
+    });
   });
 
   describe("Finish-to-Start (FS) Dependencies", () => {
@@ -345,6 +352,15 @@ describe("Ticket 11.1: Procurement Task Data Model & State Mapper (ganttDataMapp
       );
       expect(allChildrenCount).toBe(21);
     });
+
+    it("sets manuallyScheduled: true on summary root tasks in project mapping", () => {
+      const project = mapRecordToGanttProject(mockSampleRecordAuthorized);
+      const rootTask = project.tasksData[0];
+      expect(rootTask.manuallyScheduled).toBe(true);
+      for (const child of rootTask.children ?? []) {
+        expect(child.manuallyScheduled).toBe(true);
+      }
+    });
   });
 
   describe("Edge Cases, Corrupted Dates, and Robust Carrier State Propagation", () => {
@@ -409,6 +425,21 @@ describe("Ticket 11.1: Procurement Task Data Model & State Mapper (ganttDataMapp
       const baselineSla = evaluateGanttTasksSla(baselineTasks, refDate);
       const updatedSla = evaluateGanttTasksSla(updatedTasks, refDate);
       expect(updatedSla).toEqual(baselineSla);
+    });
+
+    it("defaults referenceDate to stable createdDate when options.referenceDate is omitted", () => {
+      const tasks1 = mapRecordToGanttTasks(mockSampleRecordAuthorized);
+      const recordWithUpdatedTime: ClearinghouseRecord = {
+        ...mockSampleRecordAuthorized,
+        updatedAt: "2026-10-22T15:30:00.000Z", // hours later
+      };
+      const tasks2 = mapRecordToGanttTasks(recordWithUpdatedTime);
+
+      for (let i = 0; i < tasks1.length; i++) {
+        expect(tasks2[i].startDate).toBe(tasks1[i].startDate);
+        expect(tasks2[i].endDate).toBe(tasks1[i].endDate);
+        expect(tasks2[i].duration).toBe(tasks1[i].duration);
+      }
     });
   });
 });
