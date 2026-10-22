@@ -220,6 +220,7 @@ describe("Ticket 11.3: SLA Breach & Delay Warning Engine (slaMonitor)", () => {
       expect(getWarningIconCls("INFO")).toContain("b-fa-info-circle");
       expect(getWarningIconCls("WARNING")).toContain("b-fa-exclamation-triangle");
       expect(getWarningIconCls("CRITICAL")).toContain("b-fa-radiation");
+      expect(getWarningIconCls("CRITICAL")).toContain("motion-safe:animate-pulse");
     });
 
     it("generates accessible HTML badge markup with warning metadata", () => {

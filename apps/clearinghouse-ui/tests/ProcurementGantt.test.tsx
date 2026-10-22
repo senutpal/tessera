@@ -94,6 +94,47 @@ describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (Procurement
       const milestoneMarkers = screen.getAllByTestId("milestone-marker");
       expect(milestoneMarkers.length).toBeGreaterThan(0);
     });
+
+    it("escapes malicious task name, status, and duration in Bryntum taskTooltip template", () => {
+      let capturedConfig: any;
+      const factory = vi.fn().mockImplementation((config) => {
+        capturedConfig = config;
+        return {
+          destroy: vi.fn(),
+          isDestroyed: false,
+        };
+      });
+
+      render(<ProcurementGantt records={[mockRecord1]} ganttInstanceFactory={factory} />);
+
+      expect(capturedConfig?.features?.taskTooltip?.template).toBeDefined();
+      const template = capturedConfig.features.taskTooltip.template;
+
+      const maliciousHtml = template({
+        taskRecord: {
+          name: '<script>alert("xss")</script>',
+          status: '<img src=x onerror=alert(1)>',
+          duration: '<svg/onload=alert(2)>' as unknown as number,
+        },
+      });
+
+      expect(maliciousHtml).not.toContain("<script>");
+      expect(maliciousHtml).toContain("&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;");
+      expect(maliciousHtml).not.toContain("<img");
+      expect(maliciousHtml).toContain("&lt;img src=x onerror=alert(1)&gt;");
+      expect(maliciousHtml).not.toContain("<svg");
+      expect(maliciousHtml).toContain("&lt;svg/onload=alert(2)&gt;");
+
+      const zeroHtml = template({
+        taskRecord: { name: "Normal Task", status: "PENDING", duration: 0 },
+      });
+      expect(zeroHtml).toContain("Duration: 0h");
+
+      const undefinedHtml = template({
+        taskRecord: { name: "Undefined Duration Task", status: "PENDING" },
+      });
+      expect(undefinedHtml).toContain("Duration: 0h");
+    });
   });
 
   describe("Critical Path Highlighting & Toggling", () => {
@@ -146,7 +187,7 @@ describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (Procurement
       }).not.toThrow();
     });
 
-    it("triggers zoom actions when toolbar zoom buttons are clicked", () => {
+    it("triggers zoom actions and updates scale text when toolbar zoom buttons are clicked", () => {
       const mockZoomIn = vi.fn();
       const mockZoomOut = vi.fn();
       const mockZoomToFit = vi.fn();
@@ -163,18 +204,23 @@ describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (Procurement
 
       render(<ProcurementGantt records={[mockRecord1]} ganttInstanceFactory={factory} />);
 
+      expect(screen.getByText(/Scale: 100%/i)).toBeInTheDocument();
+
       const zoomInBtn = screen.getByTestId("zoom-in-btn");
       const zoomOutBtn = screen.getByTestId("zoom-out-btn");
       const zoomFitBtn = screen.getByTestId("zoom-fit-btn");
 
       fireEvent.click(zoomInBtn);
       expect(mockZoomIn).toHaveBeenCalledTimes(1);
+      expect(screen.getByText(/Scale: 120%/i)).toBeInTheDocument();
 
       fireEvent.click(zoomOutBtn);
       expect(mockZoomOut).toHaveBeenCalledTimes(1);
+      expect(screen.getByText(/Scale: 100%/i)).toBeInTheDocument();
 
       fireEvent.click(zoomFitBtn);
       expect(mockZoomToFit).toHaveBeenCalledTimes(1);
+      expect(screen.getByText(/Scale: 100%/i)).toBeInTheDocument();
     });
   });
 
@@ -269,6 +315,58 @@ describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (Procurement
       // Verify destroy is ONLY called on unmount
       unmount();
       expect(mockDestroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("invokes project.loadInlineData when available on data updates and refreshData, catching rejections", () => {
+      const mockLoadInlineData = vi.fn().mockResolvedValue(undefined);
+      const mockProject = {
+        loadInlineData: mockLoadInlineData,
+        tasksData: [],
+        dependenciesData: [],
+      };
+      const mockGanttInstance = {
+        destroy: vi.fn(),
+        isDestroyed: false,
+        project: mockProject,
+        features: {
+          criticalPaths: { disabled: false },
+        },
+      };
+      const factory = vi.fn().mockReturnValue(mockGanttInstance);
+      const ref = createRef<ProcurementGanttHandle>();
+
+      const { rerender } = render(
+        <ProcurementGantt ref={ref} records={[mockRecord1]} ganttInstanceFactory={factory} />,
+      );
+
+      // Re-render triggers Effect 2 which calls loadInlineData
+      rerender(
+        <ProcurementGantt
+          ref={ref}
+          records={[mockRecord1, mockRecordDelayed]}
+          ganttInstanceFactory={factory}
+        />,
+      );
+
+      expect(mockLoadInlineData).toHaveBeenCalled();
+      const lastCallArgs = mockLoadInlineData.mock.calls[mockLoadInlineData.mock.calls.length - 1][0];
+      expect(lastCallArgs.tasksData).toBeDefined();
+      expect(lastCallArgs.dependenciesData).toBeDefined();
+
+      // Imperative refreshData also calls loadInlineData
+      mockLoadInlineData.mockClear();
+      act(() => {
+        ref.current?.refreshData();
+      });
+      expect(mockLoadInlineData).toHaveBeenCalledTimes(1);
+
+      // Rejection from loadInlineData is caught and does not throw
+      mockLoadInlineData.mockRejectedValueOnce(new Error("Bryntum calculation cycle"));
+      expect(() => {
+        act(() => {
+          ref.current?.refreshData();
+        });
+      }).not.toThrow();
     });
 
     it("renders Show More Orders pagination button when records exceed maxVisibleRecords", () => {
