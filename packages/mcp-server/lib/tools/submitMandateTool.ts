@@ -98,6 +98,27 @@ function extractCartAmountFromJwt(
   }
 }
 
+function isPendingApprovalError(error: unknown): boolean {
+  if (!error) return false;
+  const msg = error instanceof Error ? error.message : String(error);
+  if (/ORDER_NOT_APPROVED/i.test(msg)) return true;
+  if (/payer has not approved/i.test(msg)) return true;
+  if (/buyer approval/i.test(msg)) return true;
+  if (/payer action required/i.test(msg)) return true;
+  if (/pending.*approval/i.test(msg)) return true;
+  if (/unapproved/i.test(msg)) return true;
+  if (typeof error === "object" && error !== null) {
+    const errObj = error as Record<string, unknown>;
+    if (errObj.name === "ORDER_NOT_APPROVED") return true;
+    const details = errObj.details as Record<string, unknown> | undefined;
+    if (typeof details === "object" && details !== null) {
+      const issue = details.issue ?? details.name;
+      if (typeof issue === "string" && /ORDER_NOT_APPROVED/i.test(issue)) return true;
+    }
+  }
+  return false;
+}
+
 export const SubmitMandateInputShape = {
   signed_mandate: z
     .object({
@@ -400,8 +421,22 @@ export function registerSubmitMandateTool(server: McpServer, context: SubmitMand
               orderId: escrowOrder.orderId,
             });
           }
-        } catch {
-          // If direct authorization is pending buyer flow or mock, authorization remains undefined
+        } catch (authErr) {
+          if (isPendingApprovalError(authErr)) {
+            // Expected pending-approval condition: direct authorization waits on buyer approval flow
+            authorization = undefined;
+          } else {
+            const authMsg = authErr instanceof Error ? authErr.message : String(authErr);
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text" as const,
+                  text: `PayPal order authorization failed for order ${escrowOrder.orderId}: ${authMsg}`,
+                },
+              ],
+            };
+          }
         }
 
         const authId = authorization?.authorizationId ?? escrowOrder.authorizationId;

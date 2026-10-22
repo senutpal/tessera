@@ -997,6 +997,114 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
       await client.close();
       await server.close();
     });
+
+    it("reports tool error when PayPal order authorization fails unexpectedly", async () => {
+      const keyPair = generateEd25519KeyPair();
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      const paymentMandate = {
+        vct: "mandate.payment.1",
+        transaction_id: "tx-auth-fail",
+        payee: { id: "store.com", name: "Store", website: "https://store.com" },
+        payment_amount: { amount: 5000, currency: "USD" },
+        payment_instrument: { id: "pi-1", type: "PAYPAL_ESCROW" },
+        iat: nowEpoch,
+        exp: nowEpoch + 3600,
+        nonce: "nonce-auth-fail",
+      };
+
+      const signed = signMandate(paymentMandate, keyPair.privateKey, keyPair.publicKey);
+
+      const server = new TesseraMcpServer({
+        createEscrowOrderFn: async (opts) => ({
+          orderId: asOrderId("ORDER-FAIL-AUTH"),
+          status: "CREATED",
+          amount: toMoney(opts.amount),
+          links: [],
+          rawResponse: createMockOrderResponse("ORDER-FAIL-AUTH"),
+        }),
+        authorizeOrderFn: async () => {
+          throw new Error("PAYMENT_SOURCE_DECLINED_BY_PROCESSOR: Card declined");
+        },
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_submit_mandate",
+        arguments: {
+          signed_mandate: {
+            mandate: paymentMandate,
+            signature: signed.signature,
+            signerPublicKey: keyPair.publicKey,
+          },
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = getTextContent(result);
+      expect(text).toContain("PayPal order authorization failed for order ORDER-FAIL-AUTH");
+      expect(text).toContain("PAYMENT_SOURCE_DECLINED_BY_PROCESSOR");
+
+      await client.close();
+      await server.close();
+    });
+
+    it("preserves pending approval status when authorization error indicates buyer approval is pending", async () => {
+      const keyPair = generateEd25519KeyPair();
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      const paymentMandate = {
+        vct: "mandate.payment.1",
+        transaction_id: "tx-auth-pending",
+        payee: { id: "store.com", name: "Store", website: "https://store.com" },
+        payment_amount: { amount: 5000, currency: "USD" },
+        payment_instrument: { id: "pi-1", type: "PAYPAL_ESCROW" },
+        iat: nowEpoch,
+        exp: nowEpoch + 3600,
+        nonce: "nonce-auth-pending",
+      };
+
+      const signed = signMandate(paymentMandate, keyPair.privateKey, keyPair.publicKey);
+
+      const server = new TesseraMcpServer({
+        createEscrowOrderFn: async (opts) => ({
+          orderId: asOrderId("ORDER-PENDING-APPROVAL"),
+          status: "CREATED",
+          amount: toMoney(opts.amount),
+          links: [],
+          rawResponse: createMockOrderResponse("ORDER-PENDING-APPROVAL"),
+        }),
+        authorizeOrderFn: async () => {
+          throw new Error("ORDER_NOT_APPROVED: Payer has not approved the Order for payment");
+        },
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_submit_mandate",
+        arguments: {
+          signed_mandate: {
+            mandate: paymentMandate,
+            signature: signed.signature,
+            signerPublicKey: keyPair.publicKey,
+          },
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      const text = getTextContent(result);
+      expect(text).toContain("AP2 Mandate Verified & Escrow Order Created");
+      expect(text).toContain("Pending approval");
+
+      await client.close();
+      await server.close();
+    });
   });
 
   describe("tessera_check_settlement", () => {
