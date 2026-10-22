@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Money } from "@tessera/core";
 import {
   amountToMoney,
+  InMemoryNonceStore,
   type MandateVerificationOptions,
   type NonceStore,
   type PaymentMandate,
@@ -69,6 +70,8 @@ export interface SubmitMandateContext {
 }
 
 export function registerSubmitMandateTool(server: McpServer, context: SubmitMandateContext = {}) {
+  const nonceStore = context.nonceStore ?? new InMemoryNonceStore();
+
   server.tool(
     "tessera_submit_mandate",
     "Submits a cryptographically signed AP2 mandate (Ed25519) to authorize buyer funds into PayPal escrow (intent: AUTHORIZE).",
@@ -96,7 +99,7 @@ export function registerSubmitMandateTool(server: McpServer, context: SubmitMand
         try {
           const verifOptions: MandateVerificationOptions = {
             publicKey: resolvedPublicKey,
-            ...(context.nonceStore !== undefined ? { nonceStore: context.nonceStore } : {}),
+            nonceStore,
           };
           verifiedMandate = await verifyMandate(
             {

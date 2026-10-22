@@ -551,6 +551,63 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
       await server.close();
     });
 
+    it("enforces replay protection by default using InMemoryNonceStore", async () => {
+      const keyPair = generateEd25519KeyPair();
+      const nowEpoch = Math.floor(Date.now() / 1000);
+      const paymentMandate = {
+        vct: "mandate.payment.1",
+        transaction_id: "tx-replay-check",
+        payee: { id: "store.com", name: "Store", website: "https://store.com" },
+        payment_amount: { amount: 5000, currency: "USD" },
+        payment_instrument: { id: "pi-1", type: "PAYPAL_ESCROW" },
+        iat: nowEpoch,
+        exp: nowEpoch + 3600,
+        nonce: "unique-nonce-12345",
+      };
+
+      const signedMandate = signMandate(paymentMandate, keyPair.privateKey, keyPair.publicKey);
+
+      const server = new TesseraMcpServer({
+        createEscrowOrderFn: async (opts) => ({
+          orderId: asOrderId("ORDER-REPLAY-1"),
+          status: "CREATED",
+          amount: toMoney(opts.amount),
+          links: [],
+          rawResponse: createMockOrderResponse("ORDER-REPLAY-1"),
+        }),
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const toolArgs = {
+        signed_mandate: {
+          mandate: paymentMandate,
+          signature: signedMandate.signature,
+          signerPublicKey: keyPair.publicKey,
+        },
+      };
+
+      const result1 = await client.callTool({
+        name: "tessera_submit_mandate",
+        arguments: toolArgs,
+      });
+      expect(result1.isError).toBeFalsy();
+
+      const result2 = await client.callTool({
+        name: "tessera_submit_mandate",
+        arguments: toolArgs,
+      });
+      expect(result2.isError).toBe(true);
+      const text2 = getTextContent(result2);
+      expect(text2).toContain("replay attempt detected");
+
+      await client.close();
+      await server.close();
+    });
+
     it("rejects tampered mandate payloads when Ed25519 signature fails verification", async () => {
       let createOrderCalled = false;
       const server = new TesseraMcpServer({
