@@ -241,6 +241,49 @@ describe("TesseraMcpServer & MCP Commerce Tools", () => {
       await server.close();
     });
 
+    it("overfetches upstream catalog results and limits after local filtering", async () => {
+      let capturedLimit: number | undefined;
+      const mockProducts = [
+        createMockProduct("prod-1", "Product A (disallowed domain)", "disallowed.com", 50.0),
+        createMockProduct("prod-2", "Product B (allowed)", "allowed.com", 60.0),
+        createMockProduct("prod-3", "Product C (allowed)", "allowed.com", 70.0),
+        createMockProduct("prod-4", "Product D (allowed)", "allowed.com", 80.0),
+      ];
+
+      const server = new TesseraMcpServer({
+        searchProductsFn: async (opts) => {
+          capturedLimit = opts.limit;
+          return { products: mockProducts };
+        },
+      });
+
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverTransport);
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await client.connect(clientTransport);
+
+      const result = await client.callTool({
+        name: "tessera_search_catalog",
+        arguments: {
+          query: "keyboard",
+          limit: 2,
+          allowed_domains: ["allowed.com"],
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(capturedLimit).toBe(20); // Math.max(2 * 4, 20) = 20
+
+      const text = getTextContent(result);
+      expect(text).not.toContain("Product A");
+      expect(text).toContain("Product B");
+      expect(text).toContain("Product C");
+      expect(text).not.toContain("Product D");
+
+      await client.close();
+      await server.close();
+    });
+
     it("handles underlying search exceptions gracefully", async () => {
       const server = new TesseraMcpServer({
         searchProductsFn: async () => {
