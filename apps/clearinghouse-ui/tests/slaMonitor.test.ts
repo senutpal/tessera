@@ -1,0 +1,224 @@
+import { describe, expect, it, vi } from "vitest";
+import { mapRecordToGanttTasks } from "../src/components/gantt/ganttDataMapper.js";
+import {
+  createSlaMonitor,
+  evaluateGanttTasksSla,
+  evaluateRecordSla,
+  getWarningBadgeHtml,
+  getWarningIconCls,
+  SlaMonitor,
+} from "../src/components/gantt/slaMonitor.js";
+import type { ClearinghouseRecord } from "../src/types.js";
+
+describe("Ticket 11.3: SLA Breach & Delay Warning Engine (slaMonitor)", () => {
+  const baseRecord: ClearinghouseRecord = {
+    transactionId: "tx-sla-001",
+    mandateId: "man-sla-001",
+    agentId: "agent-01",
+    merchantDomain: "hardware-store.com",
+    amount: 120000,
+    currency: "USD",
+    clearinghouseState: "AUTHORIZED_IN_ESCROW",
+    escrowStatus: "AUTHORIZED_HOLD",
+    riskScore: 25,
+    riskTier: "LOW",
+    hitlStatus: "NOT_REQUIRED",
+    createdAt: "2026-10-18T00:00:00.000Z",
+    updatedAt: "2026-10-18T00:30:00.000Z",
+    sequenceNumber: 1,
+    timestampMicros: 1773792000000000,
+  };
+
+  describe("Merchant Dispatch SLA Cutoff (48 hours)", () => {
+    it("flags merchant dispatch as delayed when in-progress duration exceeds 48 hours", () => {
+      // 52 hours of dispatch (56h after creation), still in AUTHORIZED_HOLD without carrier tracking
+      const simulatedNow = new Date("2026-10-20T08:00:00.000Z");
+      const evaluation = evaluateRecordSla(baseRecord, simulatedNow);
+
+      expect(evaluation.isBreached).toBe(true);
+      expect(evaluation.warnings.length).toBeGreaterThanOrEqual(1);
+
+      const dispatchWarning = evaluation.warnings.find((w) => w.stage === "MERCHANT_DISPATCH");
+      expect(dispatchWarning).toBeDefined();
+      expect(dispatchWarning?.severity).toBe("WARNING");
+      expect(dispatchWarning?.message).toContain("Dispatch SLA exceeded");
+      expect(dispatchWarning?.delayHours).toBeGreaterThan(0);
+      expect(dispatchWarning?.actionRecommended).toBe("SUPERVISOR_REVIEW");
+    });
+
+    it("does not flag dispatch delay when order is within the 48-hour window", () => {
+      // 12 hours after creation
+      const simulatedNow = new Date("2026-10-18T12:00:00.000Z"); // +12h
+      const evaluation = evaluateRecordSla(baseRecord, simulatedNow);
+
+      const dispatchWarning = evaluation.warnings.find((w) => w.stage === "MERCHANT_DISPATCH");
+      expect(dispatchWarning).toBeUndefined();
+      expect(evaluation.isBreached).toBe(false);
+    });
+  });
+
+  describe("Carrier In-Transit Tracking & PayPal OpenApi Statuses", () => {
+    it("flags CRITICAL warning and stages PayPal dispute when transit exceeds 72h carrier SLA cutoff", () => {
+      const transitRecord: ClearinghouseRecord = {
+        ...baseRecord,
+        transactionId: "tx-transit-delay",
+        clearinghouseState: "AUTHORIZED_IN_ESCROW",
+        escrowStatus: "IN_TRANSIT",
+        trackingId: "FEDEX-88221",
+        carrier: "FedEx",
+        createdAt: "2026-10-10T00:00:00.000Z",
+        updatedAt: "2026-10-11T00:00:00.000Z", // Shipped 24h later
+      };
+
+      // 8 days later (more than 72h after shipment dispatch)
+      const simulatedNow = new Date("2026-10-18T00:00:00.000Z");
+      const evaluation = evaluateRecordSla(transitRecord, simulatedNow);
+
+      expect(evaluation.isBreached).toBe(true);
+      const transitWarning = evaluation.warnings.find((w) => w.stage === "IN_TRANSIT");
+      expect(transitWarning).toBeDefined();
+      expect(transitWarning?.severity).toBe("CRITICAL");
+      expect(transitWarning?.message).toContain("In-transit carrier transit SLA exceeded");
+      expect(transitWarning?.actionRecommended).toBe("STAGE_PAYPAL_DISPUTE");
+    });
+
+    it("detects DELIVERY_DELAYED carrier tracking status from PayPal Tracking v1", () => {
+      const tasks = mapRecordToGanttTasks({
+        ...baseRecord,
+        escrowStatus: "IN_TRANSIT",
+        trackingId: "UPS-9941",
+        carrier: "UPS",
+      });
+
+      // Inject PayPal OpenAPI status
+      const transitTask = tasks.find((t) => t.stage === "IN_TRANSIT");
+      if (!transitTask) {
+        throw new Error("Expected IN_TRANSIT task to exist");
+      }
+      transitTask.carrierStatus = "DELIVERY_DELAYED";
+
+      const warnings = evaluateGanttTasksSla(tasks, new Date("2026-10-18T12:00:00.000Z"));
+      const delayWarning = warnings.find((w) => w.stage === "IN_TRANSIT");
+
+      expect(delayWarning).toBeDefined();
+      expect(delayWarning?.severity).toBe("WARNING");
+      expect(delayWarning?.message).toContain("Carrier reported delivery delay");
+      expect(delayWarning?.carrierStatus).toBe("DELIVERY_DELAYED");
+    });
+
+    it("detects ON_HOLD and PICKUP_FAILED carrier tracking statuses", () => {
+      const tasks = mapRecordToGanttTasks({
+        ...baseRecord,
+        escrowStatus: "IN_TRANSIT",
+        trackingId: "DHL-5521",
+        carrier: "DHL",
+      });
+
+      const transitTask = tasks.find((t) => t.stage === "IN_TRANSIT");
+      if (!transitTask) {
+        throw new Error("Expected IN_TRANSIT task to exist");
+      }
+      transitTask.carrierStatus = "ON_HOLD";
+
+      const warnings = evaluateGanttTasksSla(tasks, new Date("2026-10-18T12:00:00.000Z"));
+      const holdWarning = warnings.find((w) => w.stage === "IN_TRANSIT");
+
+      expect(holdWarning).toBeDefined();
+      expect(holdWarning?.message).toContain("on hold");
+    });
+
+    it("produces no warnings when carrier status is DELIVERED or COMPLETED", () => {
+      const tasks = mapRecordToGanttTasks({
+        ...baseRecord,
+        clearinghouseState: "FULFILLED_DELIVERED",
+        escrowStatus: "DELIVERED_CAPTURED",
+        trackingId: "USPS-1123",
+        carrier: "USPS",
+      });
+
+      const transitTask = tasks.find((t) => t.stage === "IN_TRANSIT");
+      if (!transitTask) {
+        throw new Error("Expected IN_TRANSIT task to exist");
+      }
+      transitTask.carrierStatus = "DELIVERED";
+
+      const warnings = evaluateGanttTasksSla(tasks, new Date("2026-10-18T12:00:00.000Z"));
+      const transitWarning = warnings.find((w) => w.stage === "IN_TRANSIT");
+      expect(transitWarning).toBeUndefined();
+    });
+  });
+
+  describe("SLA Monitor Event Emitter and Lifecycle", () => {
+    it("subscribes to SLA warning events and notifies listeners", () => {
+      const monitor = createSlaMonitor();
+      const listener = vi.fn();
+
+      const unsubscribe = monitor.onWarning(listener);
+
+      const overdueRecord: ClearinghouseRecord = {
+        ...baseRecord,
+        createdAt: "2026-10-15T00:00:00.000Z",
+      };
+
+      const emitted = monitor.evaluateAndEmit(
+        [overdueRecord],
+        new Date("2026-10-19T00:00:00.000Z"),
+      );
+      expect(emitted.length).toBeGreaterThan(0);
+      expect(listener).toHaveBeenCalled();
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stage: "MERCHANT_DISPATCH",
+        }),
+      );
+
+      // Unsubscribe test
+      unsubscribe();
+      listener.mockClear();
+
+      monitor.evaluateAndEmit([overdueRecord], new Date("2026-10-19T00:00:00.000Z"));
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("clears historical warnings and returns active warning snapshot", () => {
+      const monitor = new SlaMonitor();
+      const overdueRecord: ClearinghouseRecord = {
+        ...baseRecord,
+        createdAt: "2026-10-15T00:00:00.000Z",
+      };
+
+      monitor.evaluateAndEmit([overdueRecord], new Date("2026-10-19T00:00:00.000Z"));
+      expect(monitor.getWarnings().length).toBeGreaterThan(0);
+
+      monitor.clear();
+      expect(monitor.getWarnings()).toHaveLength(0);
+    });
+  });
+
+  describe("Visual Helper Formatting", () => {
+    it("returns correct CSS icon classes for severity levels", () => {
+      expect(getWarningIconCls("INFO")).toContain("b-fa-info-circle");
+      expect(getWarningIconCls("WARNING")).toContain("b-fa-exclamation-triangle");
+      expect(getWarningIconCls("CRITICAL")).toContain("b-fa-radiation");
+    });
+
+    it("generates accessible HTML badge markup with warning metadata", () => {
+      const warning = {
+        id: "warn-01",
+        transactionId: "tx-sla-001",
+        stage: "MERCHANT_DISPATCH" as const,
+        severity: "CRITICAL" as const,
+        message: "Merchant dispatch overdue by 24h",
+        allocatedDurationHours: 48,
+        actualDurationHours: 72,
+        delayHours: 24,
+        timestamp: "2026-10-21T10:00:00.000Z",
+      };
+
+      const badgeHtml = getWarningBadgeHtml(warning);
+      expect(badgeHtml).toContain("CRITICAL");
+      expect(badgeHtml).toContain('data-sla-severity="CRITICAL"');
+      expect(badgeHtml).toContain("Merchant dispatch overdue by 24h");
+    });
+  });
+});

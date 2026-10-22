@@ -55,6 +55,13 @@ The pub/sub event backbone coordinating domain events (`MandateVerified`, `Escro
 
 The institutional supervisory frontend (`apps/clearinghouse-ui`) consuming real-time streaming deltas from the WebSocket streaming ledger engine via `applyTransactionAsync`. Visualizes dynamic risk heatmaps (0-30 green, 31-70 amber, 71-100 red), live status badges, multi-column filtering, and provides 1-click Human-in-the-Loop (HITL) supervisor action buttons (`/counter-sign` approve, `/void` escrow void, and `/dispute` escalation) with decoupled delta buffering.
 
+### Bryntum Gantt Pro Procurement Scheduler
+
+The interactive timeline component (`apps/clearinghouse-ui`) modeling autonomous procurement lifecycles as dependent milestone task trees with baseline duration comparisons, zoom controls, and critical path highlighting.
+
+### Procurement Milestone Lifecycle & SLA Monitor
+
+A 7-stage deterministic task sequence (`MANDATE_VERIFIED`, `CATALOG_DISCOVERY`, `ESCROW_HOLD`, `MERCHANT_DISPATCH`, `IN_TRANSIT`, `DELIVERY_VERIFIED`, `ESCROW_CAPTURED`) with Finish-to-Start dependencies. Evaluates real-time shipment milestones against carrier SLAs (e.g. 48h merchant dispatch, 72h carrier transit) and flags carrier exception statuses (`DELIVERY_DELAYED`, `ON_HOLD`, `PICKUP_FAILED`, `ERROR`, `RETURNED`) with visual warning badges and reactive event notifications.
 
 ---
 
