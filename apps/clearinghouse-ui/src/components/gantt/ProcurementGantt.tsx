@@ -124,8 +124,8 @@ export const ProcurementGantt = forwardRef<ProcurementGanttHandle, ProcurementGa
       controlledShowCriticalPath !== undefined ? controlledShowCriticalPath : internalCriticalPath;
 
     const effectiveRefDate = useMemo(() => {
-      return referenceDate ? new Date(referenceDate) : undefined;
-    }, [referenceDate]);
+      return referenceDate ? new Date(referenceDate) : new Date();
+    }, [referenceDate, records]);
 
     // Filter records if a specific transaction is isolated
     const filteredRecords = useMemo(() => {
