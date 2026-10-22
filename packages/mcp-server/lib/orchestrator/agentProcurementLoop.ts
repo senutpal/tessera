@@ -442,20 +442,7 @@ export async function runAgentProcurementLoop(
       if (options.getShipmentTrackingFn) {
         milestone = await options.getShipmentTrackingFn(createdAuthId, trackingNum);
       } else if (options.paypalClient) {
-        try {
-          milestone = await options.paypalClient.getShipmentTracking(createdAuthId, trackingNum);
-        } catch {
-          milestone = {
-            transactionId: asTransactionId(transactionId),
-            trackingNumber: trackingNum,
-            carrier: carrierCode,
-            status: options.simulateCarrierDelivery
-              ? ShipmentMilestoneStatus.DELIVERED
-              : ShipmentMilestoneStatus.IN_TRANSIT,
-            rawStatus: options.simulateCarrierDelivery ? "DELIVERED" : "IN_TRANSIT",
-            trackingNumberValidated: true,
-          };
-        }
+        milestone = await options.paypalClient.getShipmentTracking(createdAuthId, trackingNum);
       } else {
         milestone = {
           transactionId: asTransactionId(transactionId),
