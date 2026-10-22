@@ -504,13 +504,15 @@ export async function runAgentProcurementLoop(
     // STEP 5: SETTLE (Delivery-Gated Escrow Capture)
     // -------------------------------------------------------------
     let captureResult: EscrowCaptureResult;
+    const captureTxId = milestone.transactionId
+      ? asTransactionId(milestone.transactionId)
+      : asTransactionId(transactionId);
+
     const captureOptions = {
       authorizationId: asAuthorizationId(createdAuthId),
-      transactionId: asTransactionId(transactionId),
+      transactionId: captureTxId,
       milestone: {
         ...milestone,
-        transactionId: asTransactionId(transactionId),
-        trackingNumberValidated: true,
       },
       amount: orderAmount,
       finalCapture: true,
