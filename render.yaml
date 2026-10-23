@@ -69,16 +69,16 @@ services:
         source: /*
         destination: /index.html
     envVars:
+      - key: VITE_CLEARINGHOUSE_API_URL
+        fromService:
+          type: web
+          name: tessera-api
+          envVarKey: RENDER_EXTERNAL_URL
       - key: VITE_CLEARINGHOUSE_WS_URL
         fromService:
           type: web
           name: tessera-api
-          property: host
-      - key: VITE_WS_URL
-        fromService:
-          type: web
-          name: tessera-api
-          property: host
+          envVarKey: RENDER_EXTERNAL_HOSTNAME
 
   # 4. Redis Key-Value Store for Sliding Window Rate Limiting and Event Bus
   - type: keyvalue
@@ -93,5 +93,5 @@ databases:
   - name: tessera-postgres
     databaseName: tessera
     user: tessera_admin
-    plan: starter
+    plan: 0.1c-256mb
     region: oregon
