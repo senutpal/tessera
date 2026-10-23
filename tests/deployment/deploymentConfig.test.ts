@@ -23,8 +23,9 @@ describe("Production Infrastructure Configuration", () => {
     expect(serviceNames).toContain("tessera-dashboard");
     expect(serviceNames).toContain("tessera-redis");
 
-    const dbNames = doc.databases.map((d: { name: string }) => d.name);
-    expect(dbNames).toContain("tessera-postgres");
+    const postgres = doc.databases.find((d: { name: string }) => d.name === "tessera-postgres");
+    expect(postgres).toBeDefined();
+    expect(postgres.plan).toBe("0.1c-256mb");
 
     // Check tessera-api configuration
     const api = doc.services.find((s: { name: string }) => s.name === "tessera-api");
@@ -45,6 +46,7 @@ describe("Production Infrastructure Configuration", () => {
     expect(dashboard.routes).toBeDefined();
     const dashboardEnvKeys = (dashboard.envVars || []).map((e: { key: string }) => e.key);
     expect(dashboardEnvKeys).toContain("VITE_CLEARINGHOUSE_WS_URL");
+    expect(dashboardEnvKeys).toContain("VITE_CLEARINGHOUSE_API_URL");
 
     // Check tessera-redis configuration
     const redis = doc.services.find((s: { name: string }) => s.name === "tessera-redis");
