@@ -1,0 +1,97 @@
+services:
+  tessera-postgres:
+    image: postgres:16-alpine
+    container_name: tessera-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tessera
+      POSTGRES_USER: tessera_admin
+      POSTGRES_PASSWORD: tessera_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - tessera_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tessera_admin -d tessera"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  tessera-redis:
+    image: redis:7-alpine
+    container_name: tessera-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - tessera_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  tessera-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: tessera-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql://tessera_admin:tessera_dev_password@tessera-postgres:5432/tessera
+      REDIS_URL: redis://tessera-redis:6379
+      PAYPAL_ENVIRONMENT: sandbox
+    ports:
+      - "3000:3000"
+    depends_on:
+      tessera-postgres:
+        condition: service_healthy
+      tessera-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  tessera-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: tessera-worker
+    restart: unless-stopped
+    command: ["node", "apps/clearinghouse-api/dist/worker.js"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://tessera_admin:tessera_dev_password@tessera-postgres:5432/tessera
+      REDIS_URL: redis://tessera-redis:6379
+      PAYPAL_ENVIRONMENT: sandbox
+    depends_on:
+      tessera-postgres:
+        condition: service_healthy
+      tessera-redis:
+        condition: service_healthy
+
+  tessera-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dashboard
+    container_name: tessera-dashboard
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - tessera-api
+
+volumes:
+  tessera_pgdata:
+    name: tessera_pgdata
+  tessera_redisdata:
+    name: tessera_redisdata

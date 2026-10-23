@@ -30,7 +30,7 @@ function makeMilestone(
   };
 }
 
-describe("TrackingStateMachine (Ticket 07.2)", () => {
+describe("TrackingStateMachine", () => {
   describe("Milestone State Machine Transitions", () => {
     it("allows valid forward transitions (SHIPPED -> IN_TRANSIT -> DELIVERED)", async () => {
       const sm = new TrackingStateMachine();

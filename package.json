@@ -15,10 +15,14 @@
     "build": "pnpm -r run build",
     "test": "vitest run",
     "test:postman": "tsx tests/postman/runPostmanTests.ts",
+    "seed:demo": "tsx scripts/seedDemo.ts",
     "prepare": "husky"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
+    "@tessera/core": "workspace:*",
+    "@tessera/event-bus": "workspace:*",
+    "@tessera/mandates": "workspace:*",
     "@types/newman": "^5.3.6",
     "@types/node": "^22.10.5",
     "dependency-cruiser": "^16.10.0",

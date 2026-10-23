@@ -96,7 +96,7 @@ const mockSampleRecordBreached: ClearinghouseRecord = {
   timestampMicros: 1773800000000000,
 };
 
-describe("Ticket 11.1: Procurement Task Data Model & State Mapper (ganttDataMapper)", () => {
+describe("Procurement Task Data Model & State Mapper (ganttDataMapper)", () => {
   describe("7-Stage Milestone Task Tree Generation", () => {
     it("generates exactly 7 stage milestone tasks for a transaction record", () => {
       const tasks = mapRecordToGanttTasks(mockSampleRecordAuthorized);

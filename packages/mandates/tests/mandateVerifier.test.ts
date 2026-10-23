@@ -61,7 +61,7 @@ describe("AP2 Mandate Verifier Engine", () => {
     nonce: "pay-nonce-001",
   };
 
-  describe("Schema Validation (Ticket 02.1)", () => {
+  describe("Schema Validation", () => {
     it("validates compliant Checkout Mandate payload", () => {
       const parsed = CheckoutMandateSchema.parse(validCheckoutPayload);
       expect(parsed.vct).toBe("mandate.checkout.1");
@@ -124,7 +124,7 @@ describe("AP2 Mandate Verifier Engine", () => {
     });
   });
 
-  describe("Full Mandate Verification Pipeline (Ticket 02.2 & 02.3)", () => {
+  describe("Full Mandate Verification Pipeline", () => {
     it("verifies valid signed Checkout Mandate", async () => {
       const signed = signMandate(validCheckoutPayload, agentKeys.privateKey, agentKeys.publicKey);
       const verified = await verifyCheckoutMandate(signed, {

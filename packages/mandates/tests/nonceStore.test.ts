@@ -102,7 +102,7 @@ describe("Anti-Replay Nonce Store", () => {
     });
   });
 
-  describe("RedisNonceStore (Ticket 02.3)", () => {
+  describe("RedisNonceStore", () => {
     it("consumes an unused nonce and delegates to Redis SET NX EX", async () => {
       const memoryDb = new Map<string, string>();
       const mockClient: RedisClientLike = {

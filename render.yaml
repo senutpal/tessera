@@ -1,0 +1,97 @@
+version: "1"
+
+services:
+  # 1. Real-time Clearinghouse API and WebSocket Streaming Ledger Engine
+  - type: web
+    name: tessera-api
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: pnpm install --frozen-lockfile && pnpm build
+    startCommand: node apps/clearinghouse-api/dist/server.js
+    healthCheckPath: /health/live
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: tessera-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: tessera-redis
+          property: connectionString
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_ENVIRONMENT
+        value: sandbox
+
+  # 2. Asynchronous Carrier Tracking Sync and SLA Monitoring Background Worker
+  - type: worker
+    name: tessera-worker
+    runtime: node
+    plan: starter
+    region: oregon
+    buildCommand: pnpm install --frozen-lockfile && pnpm build
+    startCommand: node apps/clearinghouse-api/dist/worker.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: tessera-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: tessera-redis
+          property: connectionString
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_ENVIRONMENT
+        value: sandbox
+
+  # 3. AG Grid Enterprise Clearinghouse Dashboard UI (Static Web Application)
+  - type: web
+    name: tessera-dashboard
+    runtime: static
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @tessera/clearinghouse-ui... build
+    staticPublishPath: ./apps/clearinghouse-ui/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_CLEARINGHOUSE_WS_URL
+        fromService:
+          type: web
+          name: tessera-api
+          property: host
+      - key: VITE_WS_URL
+        fromService:
+          type: web
+          name: tessera-api
+          property: host
+
+  # 4. Redis Key-Value Store for Sliding Window Rate Limiting and Event Bus
+  - type: keyvalue
+    name: tessera-redis
+    plan: starter
+    region: oregon
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []
+
+databases:
+  # 5. Managed PostgreSQL 16 Database
+  - name: tessera-postgres
+    databaseName: tessera
+    user: tessera_admin
+    plan: starter
+    region: oregon
