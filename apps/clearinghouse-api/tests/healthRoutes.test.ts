@@ -101,7 +101,7 @@ describe("Health Check Routes", () => {
     expect(json.status).toBe("DEGRADED");
     expect(json.checks.database).toBe("DOWN");
     expect(json.checks.redis).toBe("UP");
-    expect(json.error).toContain("PostgreSQL connection timeout");
+    expect(json.error).toContain("Database subsystem check failed");
   });
 
   it("handles /health/ready with HTTP 503 DEGRADED when Redis ping fails", async () => {
@@ -126,7 +126,7 @@ describe("Health Check Routes", () => {
     expect(json.status).toBe("DEGRADED");
     expect(json.checks.database).toBe("UP");
     expect(json.checks.redis).toBe("DOWN");
-    expect(json.error).toContain("ECONNREFUSED");
+    expect(json.error).toContain("Redis ping check failed");
   });
 
   it("returns false for non-health routes without touching response", async () => {
