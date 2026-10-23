@@ -69,9 +69,9 @@
 - **Anti-Replay Protection:** Redis sliding nonce store with TTL indexes prevents duplicate submissions.
 
 ### 2. Delivery-Contingent Escrow (PayPal Orders v2)
-- **Authorized Hold Pattern:** Executes orders with `"intent": "AUTHORIZE"`, reserving buyer capital in escrow without premature disbursement.
+- **Authorized Hold Pattern:** Executes orders with `"intent": "AUTHORIZE"`, placing a hold on the buyer's funds without premature disbursement.
 - **Carrier Milestone Capture:** Ingests tracking events via Tracking v1 (`SHIPPED`, `IN_TRANSIT`, `DELIVERED`); triggers `/v2/payments/authorizations/{id}/capture` upon verified delivery.
-- **Automated SLA Voiding:** Automatically voids authorizations (`/v2/payments/authorizations/{id}/void`) and returns buyer capital if carrier dispatch or transit windows expire.
+- **Automated SLA Voiding:** Automatically voids authorizations (`/v2/payments/authorizations/{id}/void`) and releases the hold if carrier dispatch or transit windows expire.
 - **Autonomous Dispute Desk:** Compiles cryptographic evidence packs for Disputes v1 or issues automated refunds upon merchant default.
 
 ### 3. Supervisory Oversight & Dual-Key Adjudication
