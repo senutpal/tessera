@@ -88,5 +88,9 @@ describe("Production Infrastructure Configuration", () => {
     expect(content).toContain("adduser --system --uid 1001 tessera");
     expect(content).toContain("USER tessera");
     expect(content).toContain("EXPOSE 3000");
+    expect(content).toContain("ARG PNPM_VERSION=10.15.0");
+    expect(content).toContain("proxy_pass http://tessera-api:3000");
+    expect(content).toContain("Upgrade $http_upgrade");
+    expect(content).toContain('Connection "upgrade"');
   });
 });
