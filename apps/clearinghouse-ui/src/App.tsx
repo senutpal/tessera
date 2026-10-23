@@ -154,10 +154,15 @@ export const App: React.FC = () => {
     typeof window !== "undefined" && window.location.host
       ? `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws/clearinghouse`
       : "ws://localhost:3000/ws/clearinghouse";
-  const wsUrl =
+  const rawWsUrl =
     (typeof import.meta !== "undefined" &&
-      (import.meta as { env?: Record<string, string> }).env?.VITE_CLEARINGHOUSE_WS_URL) ||
+      ((import.meta as { env?: Record<string, string> }).env?.VITE_CLEARINGHOUSE_WS_URL ||
+        (import.meta as { env?: Record<string, string> }).env?.VITE_WS_URL)) ||
     defaultWsUrl;
+  const wsUrl =
+    rawWsUrl.startsWith("ws://") || rawWsUrl.startsWith("wss://")
+      ? rawWsUrl
+      : `${typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:"}//${rawWsUrl}/ws/clearinghouse`;
 
   const defaultApiUrl =
     typeof window !== "undefined" &&

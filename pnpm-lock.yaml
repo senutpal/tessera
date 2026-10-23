@@ -21,6 +21,15 @@ importers:
       '@biomejs/biome':
         specifier: ^2.5.2
         version: 2.5.15
+      '@tessera/core':
+        specifier: workspace:*
+        version: link:packages/core
+      '@tessera/event-bus':
+        specifier: workspace:*
+        version: link:packages/event-bus
+      '@tessera/mandates':
+        specifier: workspace:*
+        version: link:packages/mandates
       '@types/newman':
         specifier: ^5.3.6
         version: 5.3.6
@@ -60,6 +69,12 @@ importers:
       '@tessera/event-bus':
         specifier: workspace:*
         version: link:../../packages/event-bus
+      '@tessera/paypal':
+        specifier: workspace:*
+        version: link:../../packages/paypal
+      ioredis:
+        specifier: ^6.0.0
+        version: 6.0.0
       ws:
         specifier: ^8.22.0
         version: 8.22.0

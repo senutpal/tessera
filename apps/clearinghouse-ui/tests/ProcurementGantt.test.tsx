@@ -49,7 +49,7 @@ const mockRecordDelayed: ClearinghouseRecord = {
   timestampMicros: 1773129600000000,
 };
 
-describe("Ticket 11.2: Bryntum Gantt Component & Critical Path View (ProcurementGantt)", () => {
+describe("Bryntum Gantt Component & Critical Path View (ProcurementGantt)", () => {
   beforeEach(() => {
     if (typeof window !== "undefined" && !window.matchMedia) {
       window.matchMedia = vi.fn().mockImplementation((query) => ({

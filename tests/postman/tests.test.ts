@@ -16,8 +16,8 @@ const apimaticConfigPath = path.resolve(
   "../../apps/clearinghouse-api/docs/apimatic-config.json",
 );
 
-describe("Phase 13: Postman Test Suite & APIMatic OpenAPI Spec", () => {
-  describe("Ticket 13.1: Clearinghouse OpenAPI 3.1 Specification & APIMatic Config", () => {
+describe("Postman Test Suite & APIMatic OpenAPI Spec", () => {
+  describe("Clearinghouse OpenAPI 3.1 Specification & APIMatic Config", () => {
     it("provides a valid OpenAPI 3.1 specification file with all required clearinghouse endpoints", () => {
       expect(fs.existsSync(openapiPath)).toBe(true);
       const content = fs.readFileSync(openapiPath, "utf-8");
@@ -74,7 +74,7 @@ describe("Phase 13: Postman Test Suite & APIMatic OpenAPI Spec", () => {
     });
   });
 
-  describe("Ticket 13.2: Automated Postman Collection & Pre-Request Scripts", () => {
+  describe("Automated Postman Collection & Pre-Request Scripts", () => {
     it("provides a Postman Collection conforming to Schema v2.1.0", () => {
       expect(fs.existsSync(collectionPath)).toBe(true);
       const raw = fs.readFileSync(collectionPath, "utf-8");
@@ -145,7 +145,7 @@ describe("Phase 13: Postman Test Suite & APIMatic OpenAPI Spec", () => {
     });
   });
 
-  describe("Ticket 13.3: Headless Newman CI Test Runner", () => {
+  describe("Headless Newman CI Test Runner", () => {
     it("executes the entire Postman collection headlessly with 100% assertions passing", async () => {
       const result = await runPostmanTests({
         reporters: [], // Silent during vitest run

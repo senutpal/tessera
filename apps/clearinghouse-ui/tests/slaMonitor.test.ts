@@ -10,7 +10,7 @@ import {
 } from "../src/components/gantt/slaMonitor.js";
 import type { ClearinghouseRecord } from "../src/types.js";
 
-describe("Ticket 11.3: SLA Breach & Delay Warning Engine (slaMonitor)", () => {
+describe("SLA Breach & Delay Warning Engine (slaMonitor)", () => {
   const baseRecord: ClearinghouseRecord = {
     transactionId: "tx-sla-001",
     mandateId: "man-sla-001",

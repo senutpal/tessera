@@ -70,7 +70,7 @@ function createMockTrackerResponse(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("ShipmentTrackingService (Ticket 07.1)", () => {
+describe("ShipmentTrackingService", () => {
   describe("registerTrackersBatch", () => {
     it("submits valid tracking batch payload via POST /v1/shipping/trackers-batch", async () => {
       let capturedUrl = "";

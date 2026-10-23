@@ -84,7 +84,7 @@ function createDeliveredEvent(
   };
 }
 
-describe("EscrowCaptureService (Ticket 07.3)", () => {
+describe("EscrowCaptureService", () => {
   describe("Milestone Delivery Gating & Refusal", () => {
     it("refuses capture when shipment is in transit without supervisor override", async () => {
       const authClient = new PayPalAuthClient({
