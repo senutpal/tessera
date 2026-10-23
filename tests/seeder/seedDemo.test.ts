@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { ClearinghouseRecordSchema } from "@tessera/event-bus";
 import { type SignedMandate, verifyPaymentMandate } from "@tessera/mandates";
 import { describe, expect, it } from "vitest";
@@ -13,9 +14,17 @@ describe("Demo Scenario Seeder", () => {
     expect(suite.summary.elevatedRiskCount).toBe(9);
     expect(suite.summary.criticalHitlCount).toBe(6);
     expect(suite.summary.totalVolumeMinorUnits).toBeGreaterThan(100000000); // > $1M
-    expect(suite.summary.auditDigestSha256).toMatch(/^[a-f0-9]{64}$/);
 
+    const expectedDigest = crypto
+      .createHash("sha256")
+      .update(JSON.stringify(suite.scenarios.map((s) => s.record)))
+      .digest("hex");
+    expect(suite.summary.auditDigestSha256).toBe(expectedDigest);
+
+    const generatedAtMs = new Date(suite.summary.generatedAt).getTime();
     for (const scenario of suite.scenarios) {
+      expect(new Date(scenario.record.updatedAt).getTime()).toBeLessThan(generatedAtMs);
+      expect(new Date(scenario.record.createdAt).getTime()).toBeLessThan(generatedAtMs);
       // Validate schema compliance
       const validated = ClearinghouseRecordSchema.safeParse(scenario.record);
       expect(validated.success).toBe(true);

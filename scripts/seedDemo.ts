@@ -486,7 +486,7 @@ export function generateDemoScenarios(): SeededDemoSuite {
     },
   ];
 
-  const baseTimeMs = Date.now() - 24 * 60 * 60 * 1000; // 24 hours ago baseline
+  const baseTimeMs = Date.now() - (24 * 60 * 60 * 1000 + 20 * 60 * 1000); // 24h 20m ago baseline so all record timestamps strictly precede exportedAt
 
   for (let idx = 0; idx < rawScenarios.length; idx++) {
     const raw = rawScenarios[idx];
