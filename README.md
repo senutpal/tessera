@@ -17,8 +17,8 @@
   <a href="#system-architecture">Architecture</a> &bull;
   <a href="#core-capabilities">Capabilities</a> &bull;
   <a href="#supervisory-console">Console</a> &bull;
-  <a href="#quickstart">Quickstart</a> &bull;
-  <a href="#verification-metrics">Verification</a>
+  <a href="#monorepo-layout">Monorepo</a> &bull;
+  <a href="#quickstart">Quickstart</a>
 </p>
 
 ---
@@ -146,23 +146,6 @@ pnpm run test:postman
 docker compose up --build
 ```
 Provisions PostgreSQL 16, Redis 7, Clearinghouse API (`:3000`), Background Worker, and Supervisory Console (`:8080`).
-
----
-
-## Infrastructure & Production Readiness
-
-- **Declarative IaC (`render.yaml`):** Provisions `tessera-api`, `tessera-worker`, `tessera-dashboard`, `tessera-postgres`, and `tessera-redis`.
-- **Security Hardening:** Redis-backed sliding-window rate limiter (HTTP 429 / `Retry-After`), OWASP security headers (CSP, HSTS, X-Frame-Options: DENY).
-- **Health Probes:** `/health/live` (process liveness) and `/health/ready` (socket-level database and Redis readiness).
-
----
-
-## Verification Metrics
-
-- **Unit & Integration Tests:** 653 passed across 42 test files (100%)
-- **Newman Postman Assertions:** 22/22 passed across 7 endpoints (100%)
-- **Architectural Boundary Violations:** 0 found across 148 modules
-- **Production Vulnerabilities:** 0 found (`pnpm audit --prod`)
 
 ---
 
