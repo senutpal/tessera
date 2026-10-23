@@ -1,8 +1,25 @@
-# Tessera
+<p align="center">
+  <img src="./assets/logo.png" alt="Tessera Logo" width="180" />
+</p>
 
-> Autonomous Clearinghouse & Delivery-Contingent Escrow Settlement Engine.
+<h1 align="center">Tessera</h1>
 
-Tessera is an institutional clearinghouse bridging autonomous AI purchasing agents with regulated payment rails. By combining cryptographically signed spending mandates (**Agent Payments Protocol / AP2**), delivery-contingent escrow authorization holds (**PayPal Orders v2**), automated carrier shipment milestone tracking (**PayPal Tracking v1**), and real-time streaming supervision (**AG Grid Enterprise & Bryntum Gantt Pro**), Tessera provides zero-trust financial infrastructure for multi-agent autonomous commerce.
+<p align="center">
+  <strong>Autonomous Clearinghouse & Delivery-Contingent Escrow Settlement Engine</strong>
+</p>
+
+<p align="center">
+  An institutional clearinghouse bridging autonomous AI purchasing agents with regulated payment rails.<br />
+  Enforcing zero-trust financial settlement through cryptographic spending mandates and carrier-verified milestone holds.
+</p>
+
+<p align="center">
+  <a href="#system-architecture">Architecture</a> &bull;
+  <a href="#core-capabilities">Capabilities</a> &bull;
+  <a href="#supervisory-console">Console</a> &bull;
+  <a href="#quickstart">Quickstart</a> &bull;
+  <a href="#verification-metrics">Verification</a>
+</p>
 
 ---
 
@@ -46,21 +63,31 @@ Tessera is an institutional clearinghouse bridging autonomous AI purchasing agen
 ## Core Capabilities
 
 ### 1. Cryptographic Mandate Verification (AP2)
-- **Verifiable Intent:** Implements Google AP2 (`mandate.checkout.1` bound to `mandate.payment.1`).
+- **Verifiable Intent:** Implements Google AP2 specification (`mandate.checkout.1` bound to `mandate.payment.1`).
 - **Ed25519 & RFC 8785:** Canonical JSON serialization (JCS) before signing and verifying over Ed25519 key pairs.
-- **SD-JWT Hash Binding:** Cryptographically ties execution to the canonical checkout hash (`transaction_id`).
+- **SD-JWT Hash Binding:** Cryptographically ties transaction authorization to the canonical checkout hash (`transaction_id`).
 - **Anti-Replay Protection:** Redis sliding nonce store with TTL indexes prevents duplicate submissions.
 
 ### 2. Delivery-Contingent Escrow (PayPal Orders v2)
-- **Authorized Hold Pattern:** Creates orders with `"intent": "AUTHORIZE"`, reserving buyer capital without immediate merchant capture.
+- **Authorized Hold Pattern:** Executes orders with `"intent": "AUTHORIZE"`, reserving buyer capital in escrow without premature disbursement.
 - **Carrier Milestone Capture:** Ingests tracking events via Tracking v1 (`SHIPPED`, `IN_TRANSIT`, `DELIVERED`); triggers `/v2/payments/authorizations/{id}/capture` upon verified delivery.
 - **Automated SLA Voiding:** Automatically voids authorizations (`/v2/payments/authorizations/{id}/void`) and returns buyer capital if carrier dispatch or transit windows expire.
-- **Autonomous Dispute Desk:** Generates cryptographic evidence packs for Disputes v1 or issues automated refunds upon confirmed merchant default.
+- **Autonomous Dispute Desk:** Compiles cryptographic evidence packs for Disputes v1 or issues automated refunds upon merchant default.
 
-### 3. Real-Time Supervisory Console
-- **Streaming Ledger (AG Grid Enterprise):** Monotonic state deltas over WebSockets with microsecond timestamps and dynamic risk heatmaps (Low, Elevated, Critical HITL).
-- **SLA Milestone Scheduler (Bryntum Gantt Pro):** Deterministic 7-stage procurement pipeline with critical-path calculation and carrier transit deadline monitors.
-- **Dual-Key HITL Adjudication:** Supervisor workflow for reviewing high-value transactions ($> \$250.00$) or elevated risk scores ($\ge 70/100$) before authorization.
+### 3. Supervisory Oversight & Dual-Key Adjudication
+- **Streaming Ledger:** Monotonic state deltas over WebSockets with microsecond timestamps and dynamic risk heatmaps (Low, Elevated, Critical HITL).
+- **SLA Milestone Scheduler:** Deterministic 7-stage procurement pipeline with critical-path calculation and carrier transit deadline monitors.
+- **Dual-Key HITL Adjudication:** Supervisor controls for reviewing high-value transactions ($> \$250.00$) or elevated risk scores ($\ge 70/100$) before authorization.
+
+---
+
+## Supervisory Console
+
+<p align="center">
+  <img src="./assets/console.png" alt="Tessera Supervisory Console" width="100%" />
+</p>
+
+The institutional console pairs high-throughput virtualized data tables (**AG Grid Enterprise**) with deterministic milestone scheduling (**Bryntum Gantt Pro**) to give risk officers real-time operational visibility over all active agent procurements.
 
 ---
 
@@ -94,10 +121,10 @@ repo/
 - pnpm >= 10.0.0
 - Docker & Docker Compose (optional)
 
-### Setup & Run
+### Setup & Verification
 
 ```bash
-# 1. Install dependencies
+# 1. Install monorepo dependencies
 pnpm install
 
 # 2. Run quality gates & verification suite
@@ -118,7 +145,7 @@ pnpm run test:postman
 ```bash
 docker compose up --build
 ```
-Spins up PostgreSQL 16, Redis 7, Clearinghouse API (`:3000`), Background Worker, and AG Grid Dashboard (`:8080`).
+Provisions PostgreSQL 16, Redis 7, Clearinghouse API (`:3000`), Background Worker, and Supervisory Console (`:8080`).
 
 ---
 
