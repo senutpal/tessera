@@ -117,32 +117,38 @@ describe("Rate Limiter Middleware", () => {
     expect(r3.allowed).toBe(false);
   });
 
-  it("extracts client identifiers accurately from various headers", () => {
-    const req1 = {
-      headers: { "x-forwarded-for": "203.0.113.195, 70.41.3.18" },
+  it("extracts client identifiers accurately with anti-spoofing proxy hop controls", () => {
+    // 1. By default (trustProxyHops = 0), proxy headers are untrusted and ignored
+    const reqSpoofed = {
+      headers: { "x-forwarded-for": "203.0.113.195, 70.41.3.18", "x-real-ip": "1.2.3.4" },
+      socket: { remoteAddress: "192.0.2.1" },
     } as unknown as IncomingMessage;
-    expect(extractClientIdentifier(req1)).toBe("203.0.113.195");
+    expect(extractClientIdentifier(reqSpoofed)).toBe("192.0.2.1");
+    expect(extractClientIdentifier(reqSpoofed, 0)).toBe("192.0.2.1");
 
+    // 2. When trustProxyHops = 1, reads the rightmost trusted proxy hop
+    expect(extractClientIdentifier(reqSpoofed, 1)).toBe("70.41.3.18");
+
+    // 3. When trustProxyHops = 2, reads the second hop from the right
+    expect(extractClientIdentifier(reqSpoofed, 2)).toBe("203.0.113.195");
+
+    // 4. Array-based X-Forwarded-For headers
     const reqArrayForwarded = {
       headers: { "x-forwarded-for": ["198.51.100.99, 10.0.0.1"] },
+      socket: { remoteAddress: "192.0.2.1" },
     } as unknown as IncomingMessage;
-    expect(extractClientIdentifier(reqArrayForwarded)).toBe("198.51.100.99");
+    expect(extractClientIdentifier(reqArrayForwarded, 1)).toBe("10.0.0.1");
+    expect(extractClientIdentifier(reqArrayForwarded, 2)).toBe("198.51.100.99");
 
-    const req2 = {
-      headers: { "x-real-ip": "198.51.100.42" },
-    } as unknown as IncomingMessage;
-    expect(extractClientIdentifier(req2)).toBe("198.51.100.42");
+    // 5. When hop count exceeds entry count, falls back to socket address
+    expect(extractClientIdentifier(reqSpoofed, 5)).toBe("192.0.2.1");
 
-    const reqArrayRealIp = {
-      headers: { "x-real-ip": ["198.51.100.77"] },
-    } as unknown as IncomingMessage;
-    expect(extractClientIdentifier(reqArrayRealIp)).toBe("198.51.100.77");
-
-    const req3 = {
+    // 6. Direct socket connection without proxy headers
+    const reqDirect = {
       headers: {},
       socket: { remoteAddress: "192.0.2.1" },
     } as unknown as IncomingMessage;
-    expect(extractClientIdentifier(req3)).toBe("192.0.2.1");
+    expect(extractClientIdentifier(reqDirect)).toBe("192.0.2.1");
   });
 
   it("sets HTTP 429 and Retry-After headers when rate limit is exceeded in middleware", async () => {
