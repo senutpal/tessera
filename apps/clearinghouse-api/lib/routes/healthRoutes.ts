@@ -94,8 +94,9 @@ export async function handleHealthRoutes(
           failureDetail = "Database subsystem check failed";
         }
       } catch (err) {
+        console.error("[tessera-api] Database readiness check failed:", err);
         databaseHealthy = false;
-        failureDetail = err instanceof Error ? err.message : String(err);
+        failureDetail = "Database subsystem check failed";
       }
     } else if (process.env.DATABASE_URL) {
       try {
@@ -104,8 +105,9 @@ export async function handleHealthRoutes(
           failureDetail = "Database connection check failed";
         }
       } catch (err) {
+        console.error("[tessera-api] Database connection check failed:", err);
         databaseHealthy = false;
-        failureDetail = err instanceof Error ? err.message : String(err);
+        failureDetail = "Database connection check failed";
       }
     }
 
@@ -119,12 +121,11 @@ export async function handleHealthRoutes(
             : "Redis subsystem check failed";
         }
       } catch (err) {
+        console.error("[tessera-api] Redis readiness check failed:", err);
         redisHealthy = false;
         failureDetail = failureDetail
-          ? `${failureDetail}; ${err instanceof Error ? err.message : String(err)}`
-          : err instanceof Error
-            ? err.message
-            : String(err);
+          ? `${failureDetail}; Redis subsystem check failed`
+          : "Redis subsystem check failed";
       }
     } else if (options.redis) {
       try {
@@ -132,16 +133,15 @@ export async function handleHealthRoutes(
         redisHealthy = pingResult === "PONG";
         if (!redisHealthy) {
           failureDetail = failureDetail
-            ? `${failureDetail}; Redis ping returned ${pingResult}`
-            : `Redis ping returned ${pingResult}`;
+            ? `${failureDetail}; Redis ping check failed`
+            : "Redis ping check failed";
         }
       } catch (err) {
+        console.error("[tessera-api] Redis ping check failed:", err);
         redisHealthy = false;
         failureDetail = failureDetail
-          ? `${failureDetail}; ${err instanceof Error ? err.message : String(err)}`
-          : err instanceof Error
-            ? err.message
-            : String(err);
+          ? `${failureDetail}; Redis ping check failed`
+          : "Redis ping check failed";
       }
     }
 
