@@ -41,10 +41,12 @@ export async function startServer(
             "[tessera-api] Redis connection failed, falling back to in-memory:",
             err instanceof Error ? err.message : String(err),
           );
+          redis?.disconnect();
           redis = undefined;
           redisConnected = false;
         });
     } catch {
+      redis?.disconnect();
       redis = undefined;
       redisConnected = false;
     }
@@ -54,9 +56,10 @@ export async function startServer(
     redis,
     windowMs: 60000,
     max: 1000,
+    trustProxyHops: Number(process.env.TRUSTED_PROXY_HOPS || 0),
   });
 
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     // 1. Security Headers (CSP, HSTS, X-Frame-Options, etc.)
     applySecurityHeaders(res);
 
@@ -103,6 +106,19 @@ export async function startServer(
 
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "NOT_FOUND", path: pathname }));
+  };
+
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void handleRequest(req, res).catch((err) => {
+      console.error("[tessera-api] Unhandled request error:", err);
+      if (!res.headersSent) {
+        const isBadUrl = err instanceof TypeError && /Invalid URL/.test(err.message);
+        res.writeHead(isBadUrl ? 400 : 500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: isBadUrl ? "BAD_REQUEST" : "INTERNAL_ERROR" }));
+      } else if (!res.writableEnded) {
+        res.end();
+      }
+    });
   });
 
   const socketServer = createClearinghouseSocketServer({

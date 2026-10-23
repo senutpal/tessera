@@ -12,6 +12,7 @@ export interface RateLimiterOptions {
   windowMs?: number | undefined; // Window duration in milliseconds (default: 60,000ms)
   max?: number | undefined; // Max allowed requests per window (default: 100)
   keyPrefix?: string | undefined; // Key prefix (default: "rl:")
+  trustProxyHops?: number | undefined; // Number of trusted reverse proxy hops (default: 0)
 }
 
 export interface RateLimitResult {
@@ -139,27 +140,31 @@ export class RateLimiter {
 
 /**
  * Extracts a client identifier from HTTP request headers or socket address.
+ * Proxy headers (X-Forwarded-For) are only evaluated when trustProxyHops > 0,
+ * reading from the rightmost proxy hop to prevent spoofing.
  */
-export function extractClientIdentifier(req: IncomingMessage): string {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string" && forwarded.trim().length > 0) {
-    const firstIp = forwarded.split(",")[0]?.trim();
-    if (firstIp) return firstIp;
-  } else if (Array.isArray(forwarded) && forwarded.length > 0) {
-    const firstEntry = forwarded[0];
-    if (typeof firstEntry === "string" && firstEntry.trim().length > 0) {
-      const firstIp = firstEntry.split(",")[0]?.trim();
-      if (firstIp) return firstIp;
-    }
-  }
+export function extractClientIdentifier(req: IncomingMessage, trustProxyHops = 0): string {
+  if (trustProxyHops > 0) {
+    const forwarded = req.headers["x-forwarded-for"];
+    let entries: string[] = [];
 
-  const realIp = req.headers["x-real-ip"];
-  if (typeof realIp === "string" && realIp.trim().length > 0) {
-    return realIp.trim();
-  } else if (Array.isArray(realIp) && realIp.length > 0) {
-    const firstEntry = realIp[0];
-    if (typeof firstEntry === "string" && firstEntry.trim().length > 0) {
-      return firstEntry.trim();
+    if (typeof forwarded === "string" && forwarded.trim().length > 0) {
+      entries = forwarded
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+    } else if (Array.isArray(forwarded) && forwarded.length > 0) {
+      entries = forwarded.flatMap((item) =>
+        item
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0),
+      );
+    }
+
+    if (entries.length >= trustProxyHops) {
+      const selected = entries[entries.length - trustProxyHops];
+      if (selected) return selected;
     }
   }
 
@@ -172,9 +177,10 @@ export function extractClientIdentifier(req: IncomingMessage): string {
  */
 export function createRateLimitMiddleware(options: RateLimiterOptions = {}) {
   const limiter = new RateLimiter(options);
+  const trustProxyHops = options.trustProxyHops ?? 0;
 
   return async (req: IncomingMessage, res: ServerResponse, next?: () => void): Promise<boolean> => {
-    const id = extractClientIdentifier(req);
+    const id = extractClientIdentifier(req, trustProxyHops);
     const result = await limiter.checkLimit(id);
 
     res.setHeader("X-RateLimit-Limit", String(result.limit));
